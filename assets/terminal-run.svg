@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="270" viewBox="0 0 980 270" fill="none">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0B1220"/>
+      <stop offset="100%" stop-color="#030712"/>
+    </linearGradient>
+  </defs>
+  <rect width="980" height="270" fill="url(#bg2)"/>
+  <rect x="18" y="16" width="944" height="238" rx="10" fill="#111827" stroke="#1F2937"/>
+  <circle cx="42" cy="33" r="6" fill="#EF4444"/>
+  <circle cx="62" cy="33" r="6" fill="#F59E0B"/>
+  <circle cx="82" cy="33" r="6" fill="#10B981"/>
+  <text x="104" y="38" fill="#9CA3AF" font-family="Consolas, 'Courier New', monospace" font-size="12">wiredapply-runtime</text>
+
+  <text x="40" y="70" fill="#22C55E" font-family="Consolas, 'Courier New', monospace" font-size="15">wiredapply@ops:~$ curl -X POST http://localhost:8000/pipeline/run -b "auth=..."</text>
+  <text x="40" y="98" fill="#93C5FD" font-family="Consolas, 'Courier New', monospace" font-size="14">{"message":"Pipeline run queued","data":{"runId":"9b6b-7af4-11ef-a2f0"}}</text>
+
+  <text x="40" y="136" fill="#22C55E" font-family="Consolas, 'Courier New', monospace" font-size="15">wiredapply@ops:~$ curl http://localhost:8000/pipeline/status -b "auth=..."</text>
+  <text x="40" y="164" fill="#93C5FD" font-family="Consolas, 'Courier New', monospace" font-size="14">{"message":"Pipeline status retrieved successfully","data":{"jobsCount":42,"applicationsCount":6}}</text>
+
+  <text x="40" y="202" fill="#22C55E" font-family="Consolas, 'Courier New', monospace" font-size="15">wiredapply@ops:~$ python -m workers.smtp.email_worker</text>
+  <text x="40" y="228" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="14">[ok] queue subscribed: digest.email</text>
+</svg>

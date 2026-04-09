@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="270" viewBox="0 0 980 270" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#0B1220"/>
+    </linearGradient>
+    <filter id="softGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="0.8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="980" height="270" fill="url(#bg)"/>
+  <rect x="16" y="14" width="948" height="242" rx="10" fill="#0F172A" stroke="#243042"/>
+
+  <circle cx="40" cy="31" r="6" fill="#EF4444"/>
+  <circle cx="60" cy="31" r="6" fill="#F59E0B"/>
+  <circle cx="80" cy="31" r="6" fill="#10B981"/>
+  <text x="102" y="36" fill="#9CA3AF" font-family="Consolas, 'Courier New', monospace" font-size="12">wiredapply@ops // clean-terminal-view</text>
+
+  <g filter="url(#softGlow)">
+    <text xml:space="preserve" x="36" y="74" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="20" font-weight="700">__        ___              _      _                </text>
+    <text xml:space="preserve" x="36" y="102" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="20" font-weight="700">\ \      / (_)_ __ ___  __| |    / \   _ __  _ __  </text>
+    <text xml:space="preserve" x="36" y="130" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="20" font-weight="700"> \ \ /\ / /| | '__/ _ \/ _` |   / _ \ | '_ \| '_ \ </text>
+    <text xml:space="preserve" x="36" y="158" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="20" font-weight="700">  \ V  V / | | | |  __/ (_| |  / ___ \| |_) | |_) |</text>
+    <text xml:space="preserve" x="36" y="186" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="20" font-weight="700">   \_/\_/  |_|_|  \___|\__,_| /_/   \_\ .__/| .__/ </text>
+    <text xml:space="preserve" x="36" y="214" fill="#86EFAC" font-family="Consolas, 'Courier New', monospace" font-size="20" font-weight="700">                                      |_|   |_|    </text>
+    <animate attributeName="opacity" values="0;1" dur="1s" fill="freeze"/>
+    <animate attributeName="opacity" values="1;0.97;1" dur="6s" begin="1s" repeatCount="indefinite"/>
+  </g>
+
+  <rect x="36" y="226" width="12" height="6" fill="#86EFAC">
+    <animate attributeName="opacity" values="1;0;1" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
+</svg>

@@ -20,22 +20,13 @@
   <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=16&duration=2500&pause=1000&color=9CA3AF&center=true&vCenter=true&width=980&lines=%5Bboot%5D+postgres+pool+online;%5Bboot%5D+redis+cache+%2B+locks+online;%5Bboot%5D+rabbitmq+channel+online;%5Brun%5D+scheduler+-%3E+pipeline.run+-%3E+workers+chain;%5Bguardrail%5D+final+submit+requires+human+confirmation" alt="runtime typing" />
 </p>
 
-```text
-wiredapply@ops:~$ ./boot
-[ok] postgres pool connected
-[ok] redis connected
-[ok] rabbitmq channel connected
-[ok] api docs available at /docs
-```
+<p align="center">
+  <img src="assets/terminal-boot.svg" alt="Terminal boot preview" width="980" />
+</p>
 
-```text
-__        ___              _      _                
-\ \      / (_)_ __ ___  __| |    / \   _ __  _ __  
- \ \ /\ / /| | '__/ _ \/ _` |   / _ \ | '_ \| '_ \ 
-  \ V  V / | | | |  __/ (_| |  / ___ \| |_) | |_) |
-   \_/\_/  |_|_|  \___|\__,_| /_/   \_\ .__/| .__/ 
-                                      |_|   |_|    
-```
+<p align="center">
+  <img src="assets/wiredapply-ascii-animated.svg" alt="WiredApply ASCII animated terminal" width="980" />
+</p>
 
 <p align="center"><strong>PT-BR</strong> | <strong>EN</strong></p>
 
@@ -90,36 +81,9 @@ python -m workers.smtp.email_worker
 
 ### Pipeline de Workers
 
-```text
-[scheduler/manual]
-       |
-       v
-POST /pipeline/run
-       |
-       v
-  queue: ingestion.jobs
-       |
-       v
-worker: ingestion_worker
-       |
-       v
-  queue: jobs.normalized
-       |
-       v
-worker: normalize_dedupe_worker
-       |
-       v
-  queue: scoring.jobs
-       |
-       v
-worker: scoring_worker
-   |                     \
-   |                      +--> queue: digest.email -> digest_worker
-   v
-queue: shortlist.apply -> apply_worker
-                           |
-                           +--> queue: retry.apply -> retry_worker -> shortlist.apply
-```
+<p align="center">
+  <img src="assets/pipeline-workers.svg" alt="Pipeline de Workers" width="1000" />
+</p>
 
 Detalhe por etapa:
 
@@ -145,13 +109,9 @@ Pipeline status (MVP target):
 
 ### Snapshot de terminal
 
-```text
-wiredapply@ops:~$ curl -X POST http://localhost:8000/pipeline/run -b "auth=..."
-{"message":"Pipeline run queued","data":{"runId":"9b6b..."}}
-
-wiredapply@ops:~$ curl http://localhost:8000/pipeline/status -b "auth=..."
-{"message":"Pipeline status retrieved successfully","data":{"jobsCount":42,"applicationsCount":6}}
-```
+<p align="center">
+  <img src="assets/terminal-run.svg" alt="Terminal runtime preview" width="980" />
+</p>
 
 ### Roadmap curto
 
@@ -232,22 +192,15 @@ python -m workers.smtp.email_worker
 
 ### Workers pipeline
 
-```text
-scheduler/manual -> /pipeline/run -> ingestion.jobs
-ingestion_worker -> jobs.normalized
-normalize_dedupe_worker -> scoring.jobs
-scoring_worker -> shortlist.apply + digest.email
-apply_worker -> applications
-retry_worker (retry.apply) -> shortlist.apply
-digest_worker -> daily digest notification flow
-```
+<p align="center">
+  <img src="assets/pipeline-workers.svg" alt="Workers pipeline" width="1000" />
+</p>
 
 ### Runtime snapshot
 
-```text
-wiredapply@ops:~$ curl -X POST http://localhost:8000/pipeline/run -b "auth=..."
-{"message":"Pipeline run queued","data":{"runId":"9b6b..."}}
-```
+<p align="center">
+  <img src="assets/terminal-run.svg" alt="Terminal runtime preview" width="980" />
+</p>
 
 ### Short roadmap
 
