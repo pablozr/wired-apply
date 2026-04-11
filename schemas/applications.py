@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import TypedDict, Optional
 
 import asyncpg
 from pydantic import BaseModel, Field, field_validator
@@ -8,7 +8,7 @@ class ApplicationCreateRequest(BaseModel):
     job_id: int = Field(alias="jobId")
     status: str = Field(default="PENDING", min_length=1)
     channel: str = Field(default="MANUAL", min_length=1)
-    notes: str | None = None
+    notes: Optional[str] = None
 
     model_config = {"populate_by_name": True}
 
@@ -19,7 +19,7 @@ class ApplicationCreateRequest(BaseModel):
 
     @field_validator("notes")
     @classmethod
-    def normalize_optional_notes(cls, value: str | None) -> str | None:
+    def normalize_optional_notes(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
 
@@ -29,12 +29,12 @@ class ApplicationCreateRequest(BaseModel):
 
 
 class ApplicationUpdateRequest(BaseModel):
-    status: str | None = Field(default=None, min_length=1)
-    notes: str | None = None
+    status: Optional[str] = Field(default=None, min_length=1)
+    notes: Optional[str] = None
 
     @field_validator("status")
     @classmethod
-    def normalize_optional_uppercase(cls, value: str | None) -> str | None:
+    def normalize_optional_uppercase(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
 
@@ -42,7 +42,7 @@ class ApplicationUpdateRequest(BaseModel):
 
     @field_validator("notes")
     @classmethod
-    def normalize_optional_notes(cls, value: str | None) -> str | None:
+    def normalize_optional_notes(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
 
@@ -57,8 +57,8 @@ class ApplicationData(TypedDict):
     jobId: int
     status: str
     channel: str
-    notes: str | None
-    appliedAt: str | None
+    notes: Optional[str]
+    appliedAt: Optional[str]
     createdAt: str
     updatedAt: str
 
