@@ -29,6 +29,12 @@ async def _adjust_score_weights_from_feedback(
     user_id: int,
     rating: int,
 ) -> dict[str, float]:
+    # Fluxo de ajuste:
+    # 1) garante que o usuario tem uma linha em score_weights
+    # 2) trava a linha (FOR UPDATE) para evitar corrida de escrita concorrente
+    # 3) calcula impacto/delta a partir do rating
+    # 4) aplica guardrails (+/- 15%) e normaliza soma para 1.0
+    # 5) persiste pesos novos e retorna payload para resposta
     await conn.execute(
         """
         INSERT INTO score_weights (user_id)
@@ -102,10 +108,12 @@ async def create_feedback(
     user_id: int,
     data: FeedbackCreateRequest,
 ) -> dict:
+    # Entrada invalida para o contrato de feedback.
     if not feedback_policy.is_valid_feedback_rating(data.rating):
         return {"status": False, "message": "Invalid rating", "data": {}}
 
     try:
+        # Transacao: cria feedback e ajusta pesos como uma unica unidade.
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
@@ -137,6 +145,7 @@ async def create_feedback(
                 data.notes,
             )
 
+            # Se nao voltou linha, o job nao existe para esse usuario.
             if not row:
                 return {
                     "status": False,
@@ -144,6 +153,7 @@ async def create_feedback(
                     "data": {},
                 }
 
+            # Todo novo feedback recalibra score_weights do usuario.
             score_weights = await _adjust_score_weights_from_feedback(
                 conn,
                 user_id,
@@ -176,9 +186,11 @@ async def list_feedback(
     offset: int = 0,
     rating: int | None = None,
 ) -> dict:
+    # Sanitiza paginacao para proteger API/DB.
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
 
+    # Filtro de rating opcional, mas precisa ser valido quando enviado.
     if rating is not None and not feedback_policy.is_valid_feedback_rating(rating):
         return {"status": False, "message": "Invalid rating filter", "data": {}}
 
@@ -249,6 +261,7 @@ async def get_one_feedback(
     user_id: int,
     feedback_id: int,
 ) -> dict:
+    # Leitura sempre com ownership (id + user_id).
     try:
         row = await conn.fetchrow(
             """
@@ -286,6 +299,7 @@ async def update_feedback(
     feedback_id: int,
     data: FeedbackUpdateRequest,
 ) -> dict:
+    # Apenas campos permitidos entram no UPDATE dinamico.
     allowed_columns = {"rating", "notes"}
     filtered = {
         key: value
@@ -296,10 +310,12 @@ async def update_feedback(
     if not filtered:
         return {"status": False, "message": "No fields to update", "data": {}}
 
+    # Garante coerencia do rating quando informado.
     if "rating" in filtered and not feedback_policy.is_valid_feedback_rating(filtered["rating"]):
         return {"status": False, "message": "Invalid rating", "data": {}}
 
     try:
+        # Transacao: update do feedback + recalculo de pesos juntos.
         async with conn.transaction():
             columns = list(filtered.keys())
             values = list(filtered.values())
@@ -331,6 +347,7 @@ async def update_feedback(
                     "data": {},
                 }
 
+            # Usa o rating final salvo para manter consistencia do ajuste.
             score_weights = await _adjust_score_weights_from_feedback(
                 conn,
                 user_id,
@@ -356,6 +373,7 @@ async def delete_feedback(
     user_id: int,
     feedback_id: int,
 ) -> dict:
+    # Remocao tambem respeita ownership estrito.
     try:
         result = await conn.execute(
             "DELETE FROM user_feedback WHERE id = $1 AND user_id = $2",
