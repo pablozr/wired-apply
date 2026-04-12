@@ -1,5 +1,7 @@
 import json
 
+from core.logger.logger import logger
+
 
 def _serialize_value(value) -> str:
     if isinstance(value, (dict, list, tuple)):
@@ -28,13 +30,25 @@ async def acquire_lock(
     lock_value: str,
     ttl_seconds: int,
     redis_client,
+    fail_open: bool = False,
 ) -> bool:
-    acquired = await redis_client.set(
-        key,
-        _serialize_value(lock_value),
-        ex=ttl_seconds,
-        nx=True,
-    )
+    try:
+        acquired = await redis_client.set(
+            key,
+            _serialize_value(lock_value),
+            ex=ttl_seconds,
+            nx=True,
+        )
+    except Exception as e:
+        logger.exception(e)
+        if fail_open:
+            logger.warning(
+                "cache_acquire_lock_fail_open key=%s ttl_seconds=%s",
+                key,
+                ttl_seconds,
+            )
+            return True
+        raise
 
     return bool(acquired)
 

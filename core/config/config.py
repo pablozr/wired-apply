@@ -32,12 +32,18 @@ class Settings(BaseSettings):
 
     GOOGLE_CLIENT_ID: str
 
+    PIPELINE_RUN_LOCK_TTL_SECONDS: int = 900
+    PIPELINE_LAST_RUN_TTL_SECONDS: int = 86400
+    PIPELINE_EVENT_DEDUPE_TTL_SECONDS: int = 21600
+    PIPELINE_RETRY_MAX_ATTEMPTS: int = 3
+    PIPELINE_RETRY_BASE_DELAY_SECONDS: int = 2
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 settings = Settings()
 
-# Application constants (not read from environment; keep next to settings for one import surface)
+# Application constants (kept next to settings for one import surface)
 COOKIE_AUTH = "auth"
 COOKIE_AUTH_RESET = "auth_reset"
 
@@ -60,8 +66,12 @@ HTTP_CLIENT_MAX_KEEPALIVE_CONNECTIONS = 20
 
 PIPELINE_RUN_LOCK_KEY_PREFIX = "pipeline:run:lock"
 PIPELINE_LAST_RUN_KEY_PREFIX = "pipeline:run:last"
-PIPELINE_RUN_LOCK_TTL_SECONDS = 900
-PIPELINE_LAST_RUN_TTL_SECONDS = 86400
+PIPELINE_RUN_LOCK_TTL_SECONDS = settings.PIPELINE_RUN_LOCK_TTL_SECONDS
+PIPELINE_LAST_RUN_TTL_SECONDS = settings.PIPELINE_LAST_RUN_TTL_SECONDS
+PIPELINE_EVENT_DEDUPE_KEY_PREFIX = "pipeline:event:dedupe"
+PIPELINE_EVENT_DEDUPE_TTL_SECONDS = settings.PIPELINE_EVENT_DEDUPE_TTL_SECONDS
+PIPELINE_RETRY_MAX_ATTEMPTS = settings.PIPELINE_RETRY_MAX_ATTEMPTS
+PIPELINE_RETRY_BASE_DELAY_SECONDS = settings.PIPELINE_RETRY_BASE_DELAY_SECONDS
 
 ROLE_RANK_BY_NAME = {"BASIC": 1, "ADMIN": 2}
 
