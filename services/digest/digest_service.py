@@ -1,4 +1,5 @@
 import uuid
+import json
 from datetime import date, datetime, timezone
 
 import aio_pika
@@ -94,7 +95,7 @@ async def generate_daily_digest(
                 int(total_jobs or 0),
                 int(total_applications or 0),
                 int(total_interviews or 0),
-                payload,
+                json.dumps(payload),
             )
 
         await messaging_service.publish(

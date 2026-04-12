@@ -1,13 +1,13 @@
-import redis.asyncio
+from redis import asyncio as redis_asyncio
 
 from core.config.config import settings
 
 
 class Redis:
-    redis: redis.asyncio.Redis = None  # type: ignore[assignment]
+    redis: redis_asyncio.Redis | None = None
 
     async def connect(self):
-        self.redis = redis.asyncio.Redis(
+        self.redis = redis_asyncio.Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
             password=settings.REDIS_PASSWORD or None,
@@ -15,7 +15,8 @@ class Redis:
         )
 
     async def disconnect(self):
-        await self.redis.aclose()
+        if self.redis is not None:
+            await self.redis.aclose()
 
     async def get_redis(self):
         yield self.redis

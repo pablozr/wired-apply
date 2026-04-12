@@ -1,4 +1,3 @@
-import secrets
 from datetime import timedelta
 
 import aio_pika
@@ -14,11 +13,10 @@ from core.config.config import (
 from core.logger.logger import logger
 from core.security.hashing import hash_password, verify_password
 from core.security.jwt_payloads import auth_jwt_payload_from_row, reset_jwt_payload
-from core.security.security import create_access_token, verify_google_token
+from core.security.security import create_access_token
 from functions.utils.utils import generate_temp_code
 from schemas.auth import (
     ForgetPasswordRequestModel,
-    LoginGoogleRequestModel,
     LoginRequestModel,
     UpdatePasswordRequest,
     ValidateCodeRequest,
@@ -41,54 +39,6 @@ async def login(conn: asyncpg.Connection, data: LoginRequestModel) -> dict:
 
         if not row or not verify_password(data.password, row["password"]):
             return {"status": False, "message": "Invalid email or password", "data": {}}
-
-        token = create_access_token(
-            auth_jwt_payload_from_row(row),
-            expires_delta=timedelta(seconds=AUTH_COOKIE_MAX_AGE),
-        )
-        u = user_from_row(row)
-
-        return {
-            "status": True,
-            "message": "Login successful",
-            "data": {"user": u, "access_token": token},
-        }
-    except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
-
-
-async def google_login(conn: asyncpg.Connection, data: LoginGoogleRequestModel) -> dict:
-    try:
-        g = verify_google_token(data.token)
-
-        if not g or not g.get("email"):
-            return {"status": False, "message": "Invalid Google token", "data": {}}
-
-        email = g["email"].strip().lower()
-        fullname = g.get("name") or email.split("@")[0]
-
-        row = await conn.fetchrow(
-            """
-            SELECT id, fullname, email, role, password, created_at
-            FROM users WHERE email = $1
-            """,
-            email,
-        )
-
-        if not row:
-            random_pw = secrets.token_urlsafe(32)
-            hashed = hash_password(random_pw)
-            row = await conn.fetchrow(
-                """
-                INSERT INTO users (fullname, email, password, role)
-                VALUES ($1, $2, $3, 'BASIC')
-                RETURNING id, fullname, email, role, created_at
-                """,
-                fullname,
-                email,
-                hashed,
-            )
 
         token = create_access_token(
             auth_jwt_payload_from_row(row),

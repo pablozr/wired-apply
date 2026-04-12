@@ -19,7 +19,6 @@ from core.security.rate_limit import (
 )
 from schemas.auth import (
     ForgetPasswordRequestModel,
-    LoginGoogleRequestModel,
     LoginRequestModel,
     UpdatePasswordRequest,
     ValidateCodeRequest,
@@ -34,34 +33,6 @@ async def login(
     data: LoginRequestModel, conn: asyncpg.Connection = Depends(postgresql.get_db)
 ):
     response = await auth_service.login(conn, data)
-
-    if not response["status"]:
-        return JSONResponse(status_code=400, content={"detail": response["message"]})
-
-    token = response["data"].pop("access_token")
-    resp = JSONResponse(
-        status_code=200,
-        content={"message": response["message"], "data": response["data"]},
-    )
-    resp.set_cookie(
-        key=COOKIE_AUTH,
-        value=token,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/",
-        max_age=AUTH_COOKIE_MAX_AGE,
-    )
-
-    return resp
-
-
-@router.post("/google-login", dependencies=LOGIN_RATE_LIMIT_DEPS)
-async def google_login(
-    data: LoginGoogleRequestModel,
-    conn: asyncpg.Connection = Depends(postgresql.get_db),
-):
-    response = await auth_service.google_login(conn, data)
 
     if not response["status"]:
         return JSONResponse(status_code=400, content={"detail": response["message"]})

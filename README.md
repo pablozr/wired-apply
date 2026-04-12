@@ -83,6 +83,12 @@ Para derrubar tudo:
 docker compose down
 ```
 
+Smoke test rapido da pipeline (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
+```
+
 Worker SMTP (opcional):
 
 ```bash
@@ -214,6 +220,12 @@ To stop everything:
 
 ```bash
 docker compose down
+```
+
+Quick pipeline smoke test (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
 
 SMTP worker (optional):

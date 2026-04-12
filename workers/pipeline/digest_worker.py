@@ -120,7 +120,7 @@ async def _build_or_update_digest(conn, user_id: int, digest_date: date):
         int(total_jobs or 0),
         int(total_applications or 0),
         int(total_interviews or 0),
-        payload,
+        json.dumps(payload),
     )
 
 

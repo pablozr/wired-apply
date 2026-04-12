@@ -11,10 +11,6 @@ class LoginRequestModel(BaseModel):
         return v.strip().lower()
 
 
-class LoginGoogleRequestModel(BaseModel):
-    token: str
-
-
 class ForgetPasswordRequestModel(BaseModel):
     email: str
 

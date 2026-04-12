@@ -3,8 +3,6 @@ from datetime import datetime, timedelta, timezone
 import asyncpg
 import jwt
 from fastapi import Depends, HTTPException, Request
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token
 
 from core.config.config import settings
 from core.config.config import COOKIE_AUTH, COOKIE_AUTH_RESET, ROLE_RANK_BY_NAME
@@ -29,15 +27,6 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     payload.update({"exp": expire})
 
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
-
-def verify_google_token(token: str) -> dict | None:
-    try:
-        return id_token.verify_oauth2_token(
-            token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
-        )
-    except Exception:
-        return None
 
 
 async def verify_token(
