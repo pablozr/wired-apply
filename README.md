@@ -61,6 +61,28 @@ Docs:
 - `http://localhost:8000/docs`
 - `http://localhost:8000/openapi.json`
 
+### Docker
+
+```bash
+copy .env.example .env
+docker compose up --build -d
+```
+
+Com isso, API + PostgreSQL + Redis + RabbitMQ sobem juntos.
+O `schema.sql` e aplicado automaticamente no primeiro boot do Postgres.
+
+Para subir tambem os workers da pipeline:
+
+```bash
+docker compose --profile workers up --build -d
+```
+
+Para derrubar tudo:
+
+```bash
+docker compose down
+```
+
 Worker SMTP (opcional):
 
 ```bash
@@ -171,6 +193,28 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 Docs:
 - `http://localhost:8000/docs`
 - `http://localhost:8000/openapi.json`
+
+### Docker
+
+```bash
+copy .env.example .env
+docker compose up --build -d
+```
+
+This starts API + PostgreSQL + Redis + RabbitMQ together.
+`schema.sql` is applied automatically on the first Postgres boot.
+
+To start the full worker chain too:
+
+```bash
+docker compose --profile workers up --build -d
+```
+
+To stop everything:
+
+```bash
+docker compose down
+```
 
 SMTP worker (optional):
 

@@ -1,0 +1,148 @@
+name: wiredapply
+
+x-app-env: &app-env
+  DB_HOST: postgres
+  DB_PORT: 5432
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: 5672
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+
+x-app-service: &app-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    <<: *app-env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wiredapply-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-wiredapply}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-wiredapply}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: wiredapply-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      [
+        "sh",
+        "-c",
+        "if [ -n \"$REDIS_PASSWORD\" ]; then exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\"; else exec redis-server --appendonly yes; fi",
+      ]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -n \"$REDIS_PASSWORD\" ]; then redis-cli -a \"$REDIS_PASSWORD\" ping; else redis-cli ping; fi",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: wiredapply-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *app-service
+    container_name: wiredapply-api
+    command: sh -c "uvicorn main:app --host 0.0.0.0 --port ${API_PORT:-8000}"
+    ports:
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
+
+  ingestion-worker:
+    <<: *app-service
+    container_name: wiredapply-ingestion-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.ingestion_worker
+
+  normalize-worker:
+    <<: *app-service
+    container_name: wiredapply-normalize-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.normalize_dedupe_worker
+
+  scoring-worker:
+    <<: *app-service
+    container_name: wiredapply-scoring-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.scoring_worker
+
+  apply-worker:
+    <<: *app-service
+    container_name: wiredapply-apply-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.apply_worker
+
+  retry-worker:
+    <<: *app-service
+    container_name: wiredapply-retry-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.retry_worker
+
+  digest-worker:
+    <<: *app-service
+    container_name: wiredapply-digest-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.digest_worker
+
+  smtp-worker:
+    <<: *app-service
+    container_name: wiredapply-smtp-worker
+    profiles: ["workers"]
+    command: python -m workers.smtp.email_worker
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
