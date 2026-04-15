@@ -8,6 +8,10 @@ from core.config.config import (
     DIGEST_EMAIL_QUEUE,
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
+    PIPELINE_SCORING_FAILED_KEY_PREFIX,
+    PIPELINE_LAST_RUN_TTL_SECONDS,
+    PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX,
+    PIPELINE_SCORING_PROGRESS_KEY_PREFIX,
     SCORING_JOBS_QUEUE,
     SHORTLIST_APPLY_QUEUE,
 )
@@ -29,6 +33,72 @@ DEFAULT_SCORE_WEIGHTS = {
 
 def _event_dedupe_key(event_id: str) -> str:
     return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
+
+
+def _scoring_progress_key(run_id: str) -> str:
+    return f"{PIPELINE_SCORING_PROGRESS_KEY_PREFIX}:{run_id}"
+
+
+def _scoring_failed_key(run_id: str) -> str:
+    return f"{PIPELINE_SCORING_FAILED_KEY_PREFIX}:{run_id}"
+
+
+def _scoring_digest_trigger_key(run_id: str) -> str:
+    return f"{PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX}:{run_id}"
+
+
+async def _should_publish_digest(
+    run_id: str,
+    user_id: int,
+    total_jobs: int,
+    scoring_succeeded: bool,
+) -> bool:
+    redis_client = redis_cache.redis
+    if redis_client is None:
+        logger.error("scoring_worker_redis_not_connected run_id=%s user_id=%s", run_id, user_id)
+        return False
+
+    try:
+        expected_jobs = max(1, int(total_jobs or 1))
+        progress_key = _scoring_progress_key(run_id)
+        failed_key = _scoring_failed_key(run_id)
+        counter_key = progress_key if scoring_succeeded else failed_key
+
+        updated_count = int(await redis_client.incr(counter_key))
+        if updated_count == 1:
+            await redis_client.expire(counter_key, PIPELINE_LAST_RUN_TTL_SECONDS)
+
+        processed_raw, failed_raw = await redis_client.mget(progress_key, failed_key)
+        processed_count = int(processed_raw or 0)
+        failed_count = int(failed_raw or 0)
+        finished_count = processed_count + failed_count
+
+        logger.info(
+            "scoring_worker_progress run_id=%s user_id=%s processed=%s failed=%s finished=%s expected=%s success=%s",
+            run_id,
+            user_id,
+            processed_count,
+            failed_count,
+            finished_count,
+            expected_jobs,
+            scoring_succeeded,
+        )
+
+        if finished_count < expected_jobs:
+            return False
+
+        trigger_key = _scoring_digest_trigger_key(run_id)
+        trigger_value = f"{run_id}:{user_id}"
+        return await cache_service.acquire_lock(
+            trigger_key,
+            trigger_value,
+            PIPELINE_LAST_RUN_TTL_SECONDS,
+            redis_client,
+            fail_open=False,
+        )
+    except Exception as e:
+        logger.exception(e)
+        return False
 
 
 def _signal_from_job(title: str, location: str | None) -> dict[str, float]:
@@ -213,7 +283,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 rabbitmq.channel,
             )
 
-        if sequence == total_jobs:
+        if await _should_publish_digest(str(run_id), int(user_id), total_jobs):
             await messaging_service.publish(
                 DIGEST_EMAIL_QUEUE,
                 {
