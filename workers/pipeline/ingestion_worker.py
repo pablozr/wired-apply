@@ -10,58 +10,17 @@ from core.config.config import (
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
 )
+from core.http.http_client import http_client
 from core.logger.logger import logger
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
 from services.cache import cache_service
+from services.integrations import ats_service
 from services.messaging import messaging_service
 
 
 def _event_dedupe_key(event_id: str) -> str:
     return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
-
-
-def _build_mock_jobs(force: bool) -> list[dict]:
-    jobs = [
-        {
-            "title": "Backend Engineer",
-            "company": "Acme Labs",
-            "location": "Remote",
-            "source": "ingestion",
-            "source_url": "https://jobs.example.com/backend-engineer",
-            "external_job_id": "wa-backend-engineer",
-        },
-        {
-            "title": "Python Developer",
-            "company": "Orbit Systems",
-            "location": "Sao Paulo",
-            "source": "ingestion",
-            "source_url": "https://jobs.example.com/python-developer",
-            "external_job_id": "wa-python-developer",
-        },
-        {
-            "title": "Data Engineer",
-            "company": "Nova Data",
-            "location": "Remote",
-            "source": "ingestion",
-            "source_url": "https://jobs.example.com/data-engineer",
-            "external_job_id": "wa-data-engineer",
-        },
-    ]
-
-    if force:
-        jobs.append(
-            {
-                "title": "Site Reliability Engineer",
-                "company": "Atlas Cloud",
-                "location": "Remote",
-                "source": "ingestion",
-                "source_url": "https://jobs.example.com/sre",
-                "external_job_id": "wa-sre-engineer",
-            }
-        )
-
-    return jobs
 
 
 async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
@@ -89,10 +48,40 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             logger.info("ingestion_worker_duplicate_event event_id=%s", event_id)
             return
 
-        jobs = _build_mock_jobs(force)
-        total_jobs = len(jobs)
+        jobs_result = await ats_service.fetch_jobs(force=force)
+        if not jobs_result["status"]:
+            logger.error(
+                "ingestion_worker_ats_fetch_failed run_id=%s user_id=%s message=%s",
+                run_id,
+                user_id,
+                jobs_result["message"],
+            )
+            return
 
-        for index, raw_job in enumerate(jobs, start=1):
+        jobs_data = jobs_result.get("data", {})
+        jobs = jobs_data.get("jobs", [])
+        if not isinstance(jobs, list):
+            logger.error(
+                "ingestion_worker_ats_invalid_payload run_id=%s user_id=%s",
+                run_id,
+                user_id,
+            )
+            return
+
+        raw_jobs = [job for job in jobs if isinstance(job, dict)]
+        if not raw_jobs:
+            logger.warning(
+                "ingestion_worker_no_jobs_to_publish run_id=%s user_id=%s",
+                run_id,
+                user_id,
+            )
+            return
+
+        total_jobs = len(raw_jobs)
+        fallback_used = bool(jobs_data.get("fallbackUsed", False))
+        source_count = len(jobs_data.get("sources", []))
+
+        for index, raw_job in enumerate(raw_jobs, start=1):
             await messaging_service.publish(
                 JOBS_NORMALIZED_QUEUE,
                 {
@@ -108,16 +97,19 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s",
+            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s sources=%s fallback=%s",
             run_id,
             user_id,
             total_jobs,
+            source_count,
+            fallback_used,
         )
 
 
 async def run() -> None:
     await redis_cache.connect()
     await rabbitmq.connect()
+    await http_client.connect()
 
     assert rabbitmq.channel is not None
 
@@ -129,6 +121,7 @@ async def run() -> None:
     try:
         await asyncio.Future()
     finally:
+        await http_client.disconnect()
         await rabbitmq.disconnect()
         await redis_cache.disconnect()
 

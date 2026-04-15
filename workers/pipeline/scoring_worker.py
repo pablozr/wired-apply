@@ -283,7 +283,12 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 rabbitmq.channel,
             )
 
-        if await _should_publish_digest(str(run_id), int(user_id), total_jobs):
+        if await _should_publish_digest(
+            str(run_id),
+            int(user_id),
+            total_jobs,
+            scoring_succeeded=True,
+        ):
             await messaging_service.publish(
                 DIGEST_EMAIL_QUEUE,
                 {
