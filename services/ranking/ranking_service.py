@@ -1,3 +1,5 @@
+import json
+
 import asyncpg
 
 from core.logger.logger import logger
@@ -16,10 +18,12 @@ async def get_job_score(conn: asyncpg.Connection, user_id: int, job_id: int) -> 
                    js.deterministic_score,
                    js.ai_score,
                    js.ai_confidence,
-                   js.final_score,
-                   js.reason,
-                   js.ai_reason,
-                   js.updated_at AS score_updated_at
+                    js.final_score,
+                    js.reason,
+                    js.ai_reason,
+                    js.ai_breakdown,
+                    js.ai_skipped_reason,
+                    js.updated_at AS score_updated_at
             FROM jobs j
                      LEFT JOIN job_scores js
                                ON js.job_id = j.id AND js.user_id = j.user_id
@@ -66,6 +70,12 @@ async def get_job_score(conn: asyncpg.Connection, user_id: int, job_id: int) -> 
                     "bucket": scoring_policy.bucket_from_score(score),
                     "reason": row["reason"],
                     "aiReason": row["ai_reason"],
+                    "aiSkippedReason": row["ai_skipped_reason"],
+                    "aiBreakdown": (
+                        json.loads(row["ai_breakdown"])
+                        if isinstance(row["ai_breakdown"], str)
+                        else (row["ai_breakdown"] or {})
+                    ),
                     "scoreUpdatedAt": (
                         str(row["score_updated_at"]) if row["score_updated_at"] else None
                     ),
@@ -98,10 +108,12 @@ async def get_daily_ranking(
                    js.deterministic_score,
                    js.ai_score,
                    js.ai_confidence,
-                   js.final_score,
-                   js.reason,
-                   js.ai_reason,
-                   js.updated_at AS score_updated_at
+                    js.final_score,
+                    js.reason,
+                    js.ai_reason,
+                    js.ai_breakdown,
+                    js.ai_skipped_reason,
+                    js.updated_at AS score_updated_at
             FROM jobs j
                      LEFT JOIN job_scores js
                                ON js.job_id = j.id AND js.user_id = j.user_id
@@ -142,6 +154,12 @@ async def get_daily_ranking(
                 "bucket": scoring_policy.bucket_from_score(score),
                 "reason": row["reason"],
                 "aiReason": row["ai_reason"],
+                "aiSkippedReason": row["ai_skipped_reason"],
+                "aiBreakdown": (
+                    json.loads(row["ai_breakdown"])
+                    if isinstance(row["ai_breakdown"], str)
+                    else (row["ai_breakdown"] or {})
+                ),
                 "scoreUpdatedAt": (
                     row["score_updated_at"].isoformat()
                     if row["score_updated_at"]

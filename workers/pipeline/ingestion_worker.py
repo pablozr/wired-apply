@@ -1,26 +1,143 @@
 import asyncio
 import json
+import random
 import uuid
 
 from aio_pika.abc import AbstractIncomingMessage
 
 from core.config.config import (
     INGESTION_JOBS_QUEUE,
+    INGESTION_RELEVANCE_ENABLED,
+    INGESTION_RELEVANCE_EXPLORATION_RATE,
+    INGESTION_RELEVANCE_MIN_JOBS,
+    INGESTION_RELEVANCE_THRESHOLD,
     JOBS_NORMALIZED_QUEUE,
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
 )
 from core.http.http_client import http_client
 from core.logger.logger import logger
+from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
 from services.cache import cache_service
 from services.integrations import ats_service
 from services.messaging import messaging_service
+from services.rules import ingestion_relevance_policy
 
 
 def _event_dedupe_key(event_id: str) -> str:
     return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
+
+
+def _list_from_value(value) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return []
+
+    if not isinstance(value, list):
+        return []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        token = str(item).strip()
+        if not token:
+            continue
+
+        dedupe_key = token.lower()
+        if dedupe_key in seen:
+            continue
+
+        result.append(token)
+        seen.add(dedupe_key)
+
+    return result
+
+
+def _dict_from_value(value) -> dict:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return {}
+
+    return value if isinstance(value, dict) else {}
+
+
+async def _get_candidate_context(user_id: int) -> dict:
+    async with postgresql.pool.acquire() as conn:
+        profile_row = await conn.fetchrow(
+            """
+            SELECT
+                objective,
+                seniority,
+                target_roles,
+                preferred_locations,
+                preferred_work_model,
+                must_have_skills,
+                nice_to_have_skills
+            FROM user_profiles
+            WHERE user_id = $1
+            """,
+            user_id,
+        )
+
+        resume_row = await conn.fetchrow(
+            """
+            SELECT
+                extracted_json,
+                parse_status
+            FROM user_resumes
+            WHERE user_id = $1 AND is_active = TRUE
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            user_id,
+        )
+
+    candidate_context = {
+        "objective": None,
+        "seniority": None,
+        "targetRoles": [],
+        "preferredLocations": [],
+        "preferredWorkModel": None,
+        "mustHaveSkills": [],
+        "niceToHaveSkills": [],
+        "resumeSkills": [],
+        "resumeSeniority": None,
+        "resumeParseStatus": None,
+    }
+
+    if profile_row:
+        candidate_context.update(
+            {
+                "objective": profile_row["objective"],
+                "seniority": profile_row["seniority"],
+                "targetRoles": _list_from_value(profile_row["target_roles"]),
+                "preferredLocations": _list_from_value(profile_row["preferred_locations"]),
+                "preferredWorkModel": profile_row["preferred_work_model"],
+                "mustHaveSkills": _list_from_value(profile_row["must_have_skills"]),
+                "niceToHaveSkills": _list_from_value(profile_row["nice_to_have_skills"]),
+            }
+        )
+
+    if resume_row:
+        extracted_json = _dict_from_value(resume_row["extracted_json"])
+        candidate_context.update(
+            {
+                "resumeSkills": _list_from_value(extracted_json.get("skills")),
+                "resumeSeniority": extracted_json.get("seniority"),
+                "resumeParseStatus": resume_row["parse_status"],
+            }
+        )
+
+    return candidate_context
 
 
 async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
@@ -77,6 +194,63 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
             return
 
+        candidate_context = await _get_candidate_context(int(user_id))
+        candidate_has_signals = ingestion_relevance_policy.has_candidate_signals(
+            candidate_context
+        )
+
+        filtered_jobs: list[dict] = []
+        rejected_jobs: list[tuple[float, dict, dict]] = []
+        filter_enabled = bool(INGESTION_RELEVANCE_ENABLED)
+
+        for raw_job in raw_jobs:
+            relevance = ingestion_relevance_policy.evaluate_job_relevance(
+                raw_job,
+                candidate_context,
+                INGESTION_RELEVANCE_THRESHOLD,
+                INGESTION_RELEVANCE_EXPLORATION_RATE,
+                random.random(),
+            )
+
+            enriched_job = dict(raw_job)
+            enriched_job["ingestion_relevance_score"] = relevance["score"]
+            enriched_job["ingestion_relevance_reason"] = relevance["reason"]
+            enriched_job["ingestion_exploration_kept"] = relevance["explorationKept"]
+
+            if not filter_enabled or not candidate_has_signals:
+                enriched_job["ingestion_relevance_reason"] = (
+                    "filter_bypassed_missing_candidate_signals"
+                )
+                filtered_jobs.append(enriched_job)
+                continue
+
+            if relevance["keep"]:
+                filtered_jobs.append(enriched_job)
+            else:
+                rejected_jobs.append((relevance["scoreRatio"], enriched_job, relevance))
+
+        minimum_jobs = max(1, int(INGESTION_RELEVANCE_MIN_JOBS))
+        if filter_enabled and candidate_has_signals and len(filtered_jobs) < minimum_jobs:
+            rejected_jobs.sort(key=lambda item: item[0], reverse=True)
+            needed = minimum_jobs - len(filtered_jobs)
+            for _, rejected_job, rejected_meta in rejected_jobs[:needed]:
+                rejected_job["ingestion_exploration_kept"] = True
+                rejected_job["ingestion_relevance_reason"] = (
+                    f"{rejected_meta['reason']}|fallback_min_jobs"
+                )
+                filtered_jobs.append(rejected_job)
+
+        raw_jobs = filtered_jobs
+
+        if not raw_jobs:
+            logger.warning(
+                "ingestion_worker_all_jobs_filtered run_id=%s user_id=%s fetched=%s",
+                run_id,
+                user_id,
+                len(jobs),
+            )
+            return
+
         total_jobs = len(raw_jobs)
         fallback_used = bool(jobs_data.get("fallbackUsed", False))
         source_count = len(jobs_data.get("sources", []))
@@ -97,16 +271,21 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s sources=%s fallback=%s",
+            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s filter_enabled=%s candidate_signals=%s sources=%s fallback=%s",
             run_id,
             user_id,
             total_jobs,
+            len(jobs),
+            max(0, len(jobs) - total_jobs),
+            filter_enabled,
+            candidate_has_signals,
             source_count,
             fallback_used,
         )
 
 
 async def run() -> None:
+    await postgresql.connect()
     await redis_cache.connect()
     await rabbitmq.connect()
     await http_client.connect()
@@ -124,6 +303,7 @@ async def run() -> None:
         await http_client.disconnect()
         await rabbitmq.disconnect()
         await redis_cache.disconnect()
+        await postgresql.disconnect()
 
 
 if __name__ == "__main__":

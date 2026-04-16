@@ -1,5 +1,7 @@
 import asyncio
+import html
 import hashlib
+import re
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -42,6 +44,149 @@ def _clean_text(value: Any) -> str | None:
     return normalized or None
 
 
+TECH_STACK_KEYWORDS = [
+    "python",
+    "django",
+    "fastapi",
+    "flask",
+    "postgresql",
+    "mysql",
+    "redis",
+    "rabbitmq",
+    "docker",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure",
+    "javascript",
+    "typescript",
+    "react",
+    "node",
+    "golang",
+    "java",
+    "spring",
+    "c#",
+    ".net",
+    "terraform",
+    "playwright",
+]
+
+
+def _plain_text(value: Any) -> str | None:
+    text = _clean_text(value)
+    if not text:
+        return None
+
+    text = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", text)
+    text = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or None
+
+
+def _split_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in re.split(r"[,;/|\n]+", value):
+        normalized = token.strip()
+        if not normalized:
+            continue
+
+        dedupe_key = normalized.lower()
+        if dedupe_key in seen:
+            continue
+
+        tokens.append(normalized)
+        seen.add(dedupe_key)
+
+    return tokens
+
+
+def _extract_tech_stack(*texts: str | None) -> list[str]:
+    combined = " ".join([text for text in texts if text]).lower()
+    if not combined:
+        return []
+
+    stack: list[str] = []
+    seen: set[str] = set()
+
+    for keyword in TECH_STACK_KEYWORDS:
+        if keyword in combined and keyword not in seen:
+            stack.append(keyword)
+            seen.add(keyword)
+
+    return stack
+
+
+def _extract_requirements_from_text(description: str | None) -> str | None:
+    text = _clean_text(description)
+    if not text:
+        return None
+
+    normalized = text.lower()
+    section_markers = [
+        "required skills",
+        "requirements",
+        "qualifications",
+        "what we are looking for",
+        "what you'll bring",
+        "must have",
+        "you have",
+    ]
+    stop_markers = [
+        "nice to have",
+        "benefits",
+        "about ",
+        "what success looks like",
+        "how to apply",
+    ]
+
+    for marker in section_markers:
+        start = normalized.find(marker)
+        if start < 0:
+            continue
+
+        end = len(text)
+        for stop_marker in stop_markers:
+            stop = normalized.find(stop_marker, start + len(marker))
+            if stop > 0:
+                end = min(end, stop)
+
+        section = _clean_text(text[start:end])
+        if section and len(section) >= 40:
+            return section[:3000]
+
+    return None
+
+
+def _infer_seniority_hint(
+    title: str,
+    description: str | None,
+    explicit_hint: str | None = None,
+) -> str | None:
+    explicit = _clean_text(explicit_hint)
+    if explicit:
+        return explicit.upper()
+
+    text = f"{title} {description or ''}".lower()
+    if any(token in text for token in ["staff", "principal", "architect"]):
+        return "STAFF"
+    if any(token in text for token in ["lead", "manager", "head"]):
+        return "LEAD"
+    if any(token in text for token in ["senior", " sr ", " sr."]):
+        return "SENIOR"
+    if any(token in text for token in ["junior", "entry level", "intern", "trainee"]):
+        return "JUNIOR"
+    if any(token in text for token in ["mid", "middle", "pleno"]):
+        return "MID"
+
+    return None
+
+
 def _stable_external_job_id(
     provider: str,
     target: str,
@@ -64,6 +209,12 @@ def _build_mock_jobs(force: bool) -> list[dict]:
             "title": "Backend Engineer",
             "company": "Acme Labs",
             "location": "Remote",
+            "description": "Build and maintain backend services in Python.",
+            "requirements": "Python, APIs, SQL.",
+            "employment_type": "Full-time",
+            "seniority_hint": "MID",
+            "remote_policy": "REMOTE",
+            "tech_stack": ["python", "postgresql", "docker"],
             "source": "ingestion",
             "source_url": "https://jobs.example.com/backend-engineer",
             "external_job_id": "wa-backend-engineer",
@@ -72,6 +223,12 @@ def _build_mock_jobs(force: bool) -> list[dict]:
             "title": "Python Developer",
             "company": "Orbit Systems",
             "location": "Sao Paulo",
+            "description": "Develop internal APIs and integrations in Python.",
+            "requirements": "Python, FastAPI, PostgreSQL.",
+            "employment_type": "Full-time",
+            "seniority_hint": "JUNIOR",
+            "remote_policy": "HYBRID",
+            "tech_stack": ["python", "fastapi", "postgresql"],
             "source": "ingestion",
             "source_url": "https://jobs.example.com/python-developer",
             "external_job_id": "wa-python-developer",
@@ -80,6 +237,12 @@ def _build_mock_jobs(force: bool) -> list[dict]:
             "title": "Data Engineer",
             "company": "Nova Data",
             "location": "Remote",
+            "description": "Create data pipelines and ETL workflows.",
+            "requirements": "Python, SQL, cloud data tools.",
+            "employment_type": "Full-time",
+            "seniority_hint": "MID",
+            "remote_policy": "REMOTE",
+            "tech_stack": ["python", "sql", "aws"],
             "source": "ingestion",
             "source_url": "https://jobs.example.com/data-engineer",
             "external_job_id": "wa-data-engineer",
@@ -92,6 +255,12 @@ def _build_mock_jobs(force: bool) -> list[dict]:
                 "title": "Site Reliability Engineer",
                 "company": "Atlas Cloud",
                 "location": "Remote",
+                "description": "Operate distributed systems and improve reliability.",
+                "requirements": "Linux, cloud, observability.",
+                "employment_type": "Full-time",
+                "seniority_hint": "SENIOR",
+                "remote_policy": "REMOTE",
+                "tech_stack": ["kubernetes", "aws", "python"],
                 "source": "ingestion",
                 "source_url": "https://jobs.example.com/sre",
                 "external_job_id": "wa-sre-engineer",
@@ -118,7 +287,7 @@ async def _fetch_greenhouse_jobs(
 ) -> list[dict]:
     response = await client.get(
         f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs",
-        params={"content": "false"},
+        params={"content": "true"},
     )
     response.raise_for_status()
 
@@ -153,11 +322,97 @@ async def _fetch_greenhouse_jobs(
             title,
         )
 
+        description = _plain_text(raw_job.get("content"))
+
+        employment_type = None
+        seniority_hint = None
+        remote_policy = None
+        requirements_chunks: list[str] = []
+        metadata_stack: list[str] = []
+
+        metadata = raw_job.get("metadata")
+        if isinstance(metadata, list):
+            for item in metadata:
+                if not isinstance(item, dict):
+                    continue
+
+                meta_name = (_clean_text(item.get("name")) or "").lower()
+                meta_value = _plain_text(item.get("value"))
+                if not meta_name or not meta_value:
+                    continue
+
+                if (
+                    "require" in meta_name
+                    or "qualification" in meta_name
+                    or "must" in meta_name
+                    or "responsibil" in meta_name
+                ):
+                    requirements_chunks.append(meta_value)
+
+                if employment_type is None and (
+                    "employment" in meta_name
+                    or "commitment" in meta_name
+                    or "contract" in meta_name
+                    or "type" in meta_name
+                ):
+                    employment_type = meta_value
+
+                if seniority_hint is None and (
+                    "seniority" in meta_name
+                    or "level" in meta_name
+                    or "experience" in meta_name
+                ):
+                    seniority_hint = meta_value
+
+                if remote_policy is None and (
+                    "remote" in meta_name
+                    or "work model" in meta_name
+                    or "workplace" in meta_name
+                    or "location type" in meta_name
+                ):
+                    remote_policy = meta_value
+
+                if (
+                    "stack" in meta_name
+                    or "skill" in meta_name
+                    or "technology" in meta_name
+                    or "language" in meta_name
+                    or "framework" in meta_name
+                ):
+                    metadata_stack.extend(_split_tokens(meta_value))
+
+        requirements = _clean_text(" ".join(requirements_chunks))
+        if requirements is None:
+            requirements = _extract_requirements_from_text(description)
+        if requirements:
+            requirements = requirements[:3000]
+
+        seniority_hint = _infer_seniority_hint(title, description, seniority_hint)
+
+        tech_stack = _extract_tech_stack(description, requirements, " ".join(metadata_stack))
+        for token in metadata_stack:
+            normalized = token.lower()
+            if normalized and normalized not in tech_stack:
+                tech_stack.append(normalized)
+
+        location_text = (location or "").lower()
+        if remote_policy is None:
+            if "remote" in location_text:
+                remote_policy = "REMOTE"
+            elif "hybrid" in location_text:
+                remote_policy = "HYBRID"
+
         jobs.append(
             {
                 "title": title,
                 "company": company,
                 "location": location,
+                "description": description,
+                "requirements": requirements,
+                "employment_type": employment_type,
+                "seniority_hint": seniority_hint,
+                "remote_policy": remote_policy,
+                "tech_stack": tech_stack,
                 "source": "greenhouse",
                 "source_url": source_url,
                 "external_job_id": external_job_id,
@@ -208,11 +463,65 @@ async def _fetch_lever_jobs(
             title,
         )
 
+        description = _plain_text(raw_job.get("descriptionPlain")) or _plain_text(
+            raw_job.get("description")
+        )
+
+        requirements_chunks: list[str] = []
+        lists_payload = raw_job.get("lists")
+        if isinstance(lists_payload, list):
+            for section in lists_payload:
+                if not isinstance(section, dict):
+                    continue
+
+                section_title = (_clean_text(section.get("text")) or "").lower()
+                section_content = _plain_text(section.get("content"))
+                if not section_content:
+                    continue
+
+                if (
+                    "require" in section_title
+                    or "qualification" in section_title
+                    or "skill" in section_title
+                    or "responsibil" in section_title
+                ):
+                    requirements_chunks.append(section_content)
+
+        requirements = _clean_text(" ".join(requirements_chunks))
+        if requirements is None:
+            requirements = _extract_requirements_from_text(description)
+        if requirements:
+            requirements = requirements[:3000]
+
+        employment_type = None
+        seniority_hint = None
+        if isinstance(categories, dict):
+            employment_type = _clean_text(categories.get("commitment"))
+            seniority_hint = _clean_text(categories.get("level"))
+
+        seniority_hint = _infer_seniority_hint(title, description, seniority_hint)
+
+        remote_policy = _clean_text(raw_job.get("workplaceType"))
+        if remote_policy is None and isinstance(categories, dict):
+            location_hint = (_clean_text(categories.get("location")) or "").lower()
+            if "remote" in location_hint:
+                remote_policy = "REMOTE"
+            elif "hybrid" in location_hint:
+                remote_policy = "HYBRID"
+
+        tech_stack = _extract_tech_stack(description, requirements, title)
+
         jobs.append(
             {
                 "title": title,
                 "company": company_handle,
                 "location": location,
+                "description": description,
+                "requirements": requirements,
+                "employment_type": employment_type,
+                "seniority_hint": seniority_hint,
+                "remote_policy": remote_policy,
+                "tech_stack": tech_stack,
                 "source": "lever",
                 "source_url": source_url,
                 "external_job_id": external_job_id,
@@ -258,11 +567,45 @@ async def _fetch_ashby_jobs(
             title,
         )
 
+        description = (
+            _plain_text(raw_job.get("descriptionPlain"))
+            or _plain_text(raw_job.get("description"))
+            or _plain_text(raw_job.get("descriptionHtml"))
+        )
+        requirements = _plain_text(raw_job.get("requirements")) or _plain_text(
+            raw_job.get("jobRequirements")
+        )
+        if requirements is None:
+            requirements = _extract_requirements_from_text(description)
+        if requirements:
+            requirements = requirements[:3000]
+
+        employment_type = _clean_text(raw_job.get("employmentType"))
+        seniority_hint = _clean_text(raw_job.get("experienceLevel")) or _clean_text(
+            raw_job.get("seniority")
+        )
+        seniority_hint = _infer_seniority_hint(title, description, seniority_hint)
+
+        remote_policy = _clean_text(raw_job.get("locationType"))
+        if remote_policy is None:
+            if raw_job.get("isRemote") is True:
+                remote_policy = "REMOTE"
+            elif location and "remote" in location.lower():
+                remote_policy = "REMOTE"
+
+        tech_stack = _extract_tech_stack(description, requirements, title)
+
         jobs.append(
             {
                 "title": title,
                 "company": organization,
                 "location": location,
+                "description": description,
+                "requirements": requirements,
+                "employment_type": employment_type,
+                "seniority_hint": seniority_hint,
+                "remote_policy": remote_policy,
+                "tech_stack": tech_stack,
                 "source": "ashby",
                 "source_url": source_url,
                 "external_job_id": external_job_id,

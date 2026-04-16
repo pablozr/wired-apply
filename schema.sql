@@ -56,6 +56,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     title           VARCHAR(255) NOT NULL,
     company         VARCHAR(255) NOT NULL,
     location        VARCHAR(255),
+    description     TEXT,
+    requirements    TEXT,
+    employment_type VARCHAR(80),
+    seniority_hint  VARCHAR(50),
+    remote_policy   VARCHAR(50),
+    tech_stack      JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    ingestion_relevance_score NUMERIC(5,2),
+    ingestion_relevance_reason TEXT,
+    ingestion_exploration_kept BOOLEAN      NOT NULL DEFAULT FALSE,
     source          VARCHAR(50)  NOT NULL DEFAULT 'manual',
     source_url      TEXT,
     external_job_id VARCHAR(255),
@@ -80,6 +89,9 @@ CREATE TABLE IF NOT EXISTS job_scores (
     bucket              VARCHAR(1)   NOT NULL DEFAULT 'C',
     reason              TEXT,
     ai_reason           TEXT,
+    ai_breakdown        JSONB,
+    ai_context_hash     VARCHAR(64),
+    ai_skipped_reason   TEXT,
     created_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, job_id)
@@ -87,6 +99,9 @@ CREATE TABLE IF NOT EXISTS job_scores (
 
 CREATE INDEX IF NOT EXISTS job_scores_user_final_score_idx
     ON job_scores (user_id, final_score DESC NULLS LAST, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS job_scores_user_context_hash_idx
+    ON job_scores (user_id, ai_context_hash);
 
 CREATE TABLE IF NOT EXISTS applications (
     id         SERIAL PRIMARY KEY,
@@ -141,7 +156,21 @@ ALTER TABLE job_scores
     ADD COLUMN IF NOT EXISTS ai_score NUMERIC(5,2),
     ADD COLUMN IF NOT EXISTS ai_confidence NUMERIC(5,2),
     ADD COLUMN IF NOT EXISTS final_score NUMERIC(5,2),
-    ADD COLUMN IF NOT EXISTS ai_reason TEXT;
+    ADD COLUMN IF NOT EXISTS ai_reason TEXT,
+    ADD COLUMN IF NOT EXISTS ai_breakdown JSONB,
+    ADD COLUMN IF NOT EXISTS ai_context_hash VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS ai_skipped_reason TEXT;
+
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS description TEXT,
+    ADD COLUMN IF NOT EXISTS requirements TEXT,
+    ADD COLUMN IF NOT EXISTS employment_type VARCHAR(80),
+    ADD COLUMN IF NOT EXISTS seniority_hint VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS remote_policy VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS tech_stack JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS ingestion_relevance_score NUMERIC(5,2),
+    ADD COLUMN IF NOT EXISTS ingestion_relevance_reason TEXT,
+    ADD COLUMN IF NOT EXISTS ingestion_exploration_kept BOOLEAN NOT NULL DEFAULT FALSE;
 
 UPDATE job_scores
 SET

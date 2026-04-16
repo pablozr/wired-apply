@@ -1,3 +1,5 @@
+import json
+
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
 
@@ -16,18 +18,33 @@ async def create_job(
                 title,
                 company,
                 location,
+                description,
+                requirements,
+                employment_type,
+                seniority_hint,
+                remote_policy,
+                tech_stack,
                 source,
                 source_url,
                 external_job_id,
                 status
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)
             RETURNING
                 id,
                 user_id,
                 title,
                 company,
                 location,
+                description,
+                requirements,
+                employment_type,
+                seniority_hint,
+                remote_policy,
+                tech_stack,
+                ingestion_relevance_score,
+                ingestion_relevance_reason,
+                ingestion_exploration_kept,
                 source,
                 source_url,
                 external_job_id,
@@ -39,6 +56,12 @@ async def create_job(
             data.title,
             data.company,
             data.location,
+            data.description,
+            data.requirements,
+            data.employment_type,
+            data.seniority_hint,
+            data.remote_policy,
+            json.dumps(data.tech_stack or []),
             data.source,
             data.source_url,
             data.external_job_id,
@@ -76,6 +99,15 @@ async def list_jobs(
                 title,
                 company,
                 location,
+                description,
+                requirements,
+                employment_type,
+                seniority_hint,
+                remote_policy,
+                tech_stack,
+                ingestion_relevance_score,
+                ingestion_relevance_reason,
+                ingestion_exploration_kept,
                 source,
                 source_url,
                 external_job_id,
@@ -121,6 +153,15 @@ async def get_one_job(conn: asyncpg.Connection, user_id: int, job_id: int) -> di
                 title,
                 company,
                 location,
+                description,
+                requirements,
+                employment_type,
+                seniority_hint,
+                remote_policy,
+                tech_stack,
+                ingestion_relevance_score,
+                ingestion_relevance_reason,
+                ingestion_exploration_kept,
                 source,
                 source_url,
                 external_job_id,
@@ -154,6 +195,12 @@ async def update_job(
         "title",
         "company",
         "location",
+        "description",
+        "requirements",
+        "employment_type",
+        "seniority_hint",
+        "remote_policy",
+        "tech_stack",
         "source",
         "source_url",
         "external_job_id",
@@ -170,8 +217,18 @@ async def update_job(
 
     try:
         columns = list(filtered.keys())
-        values = list(filtered.values())
-        set_clause = ", ".join(f"{col} = ${idx}" for idx, col in enumerate(columns, 1))
+        values = []
+        set_parts: list[str] = []
+
+        for idx, col in enumerate(columns, 1):
+            if col == "tech_stack":
+                values.append(json.dumps(filtered[col] or []))
+                set_parts.append(f"{col} = ${idx}::jsonb")
+            else:
+                values.append(filtered[col])
+                set_parts.append(f"{col} = ${idx}")
+
+        set_clause = ", ".join(set_parts)
 
         values.extend([job_id, user_id])
 
@@ -184,6 +241,15 @@ async def update_job(
                 title,
                 company,
                 location,
+                description,
+                requirements,
+                employment_type,
+                seniority_hint,
+                remote_policy,
+                tech_stack,
+                ingestion_relevance_score,
+                ingestion_relevance_reason,
+                ingestion_exploration_kept,
                 source,
                 source_url,
                 external_job_id,

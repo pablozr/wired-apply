@@ -4,6 +4,9 @@ import re
 
 from core.config.config import (
     AI_REQUEST_TIMEOUT_SECONDS,
+    AI_SCORE_DESCRIPTION_MAX_CHARS,
+    AI_SCORE_REQUIREMENTS_MAX_CHARS,
+    AI_SCORE_SUMMARY_MAX_CHARS,
     RESUME_AI_MAX_INPUT_CHARS,
     RESUME_MIN_EXTRACTED_TEXT_CHARS,
 )
@@ -195,7 +198,6 @@ async def score_job_fit(
     job_context: dict,
     profile_context: dict | None = None,
     resume_context: dict | None = None,
-    deterministic_score: float | None = None,
 ) -> dict:
     agent = await get_tyr_agent("scoring", "JobScoringAgent", SCORING_PROMPT)
     if agent is None:
@@ -206,12 +208,105 @@ async def score_job_fit(
         }
 
     try:
+        raw_job_stack = job_context.get("techStack") or []
+        if not isinstance(raw_job_stack, list):
+            raw_job_stack = []
+
+        raw_target_roles = (profile_context or {}).get("targetRoles") or []
+        if not isinstance(raw_target_roles, list):
+            raw_target_roles = []
+
+        raw_preferred_locations = (profile_context or {}).get("preferredLocations") or []
+        if not isinstance(raw_preferred_locations, list):
+            raw_preferred_locations = []
+
+        raw_must_have = (profile_context or {}).get("mustHaveSkills") or []
+        if not isinstance(raw_must_have, list):
+            raw_must_have = []
+
+        raw_nice_to_have = (profile_context or {}).get("niceToHaveSkills") or []
+        if not isinstance(raw_nice_to_have, list):
+            raw_nice_to_have = []
+
+        raw_resume_skills = (resume_context or {}).get("skills") or []
+        if not isinstance(raw_resume_skills, list):
+            raw_resume_skills = []
+
+        raw_resume_languages = (resume_context or {}).get("languages") or []
+        if not isinstance(raw_resume_languages, list):
+            raw_resume_languages = []
+
+        compact_job_context = {
+            "jobId": job_context.get("jobId"),
+            "title": job_context.get("title"),
+            "company": job_context.get("company"),
+            "location": job_context.get("location"),
+            "description": str(job_context.get("description") or "").strip()[
+                :AI_SCORE_DESCRIPTION_MAX_CHARS
+            ],
+            "requirements": str(job_context.get("requirements") or "").strip()[
+                :AI_SCORE_REQUIREMENTS_MAX_CHARS
+            ],
+            "employmentType": job_context.get("employmentType"),
+            "seniorityHint": job_context.get("seniorityHint"),
+            "remotePolicy": job_context.get("remotePolicy"),
+            "techStack": [
+                str(item).strip()
+                for item in raw_job_stack[:20]
+                if str(item).strip()
+            ],
+            "source": job_context.get("source"),
+            "sourceUrl": job_context.get("sourceUrl"),
+        }
+
+        compact_profile_context = {
+            "objective": str((profile_context or {}).get("objective") or "").strip()[:400],
+            "seniority": (profile_context or {}).get("seniority"),
+            "targetRoles": [
+                str(item).strip()
+                for item in raw_target_roles[:10]
+                if str(item).strip()
+            ],
+            "preferredLocations": [
+                str(item).strip()
+                for item in raw_preferred_locations[:10]
+                if str(item).strip()
+            ],
+            "preferredWorkModel": (profile_context or {}).get("preferredWorkModel"),
+            "salaryExpectation": str((profile_context or {}).get("salaryExpectation") or "").strip()[:120],
+            "mustHaveSkills": [
+                str(item).strip()
+                for item in raw_must_have[:20]
+                if str(item).strip()
+            ],
+            "niceToHaveSkills": [
+                str(item).strip()
+                for item in raw_nice_to_have[:20]
+                if str(item).strip()
+            ],
+        }
+
+        compact_resume_context = {
+            "summary": str((resume_context or {}).get("summary") or "").strip()[:AI_SCORE_SUMMARY_MAX_CHARS],
+            "seniority": (resume_context or {}).get("seniority"),
+            "skills": [
+                str(item).strip()
+                for item in raw_resume_skills[:30]
+                if str(item).strip()
+            ],
+            "languages": [
+                str(item).strip()
+                for item in raw_resume_languages[:10]
+                if str(item).strip()
+            ],
+            "parseStatus": (resume_context or {}).get("parseStatus"),
+        }
+
         user_input = json.dumps(
             {
-                "job": job_context,
-                "profile": profile_context or {},
-                "resume": resume_context or {},
-                "deterministicScore": deterministic_score,
+                "job": compact_job_context,
+                "profile": compact_profile_context,
+                "resume": compact_resume_context,
             },
             ensure_ascii=False,
         )
@@ -229,6 +324,21 @@ async def score_job_fit(
             min(100.0, float(payload.get("aiScore", payload.get("score")))),
         )
 
+        raw_breakdown = payload.get("breakdown") or {}
+        if not isinstance(raw_breakdown, dict):
+            raw_breakdown = {}
+        breakdown: dict[str, float] = {}
+
+        for key in ("skillsFit", "seniorityFit", "scopeFit", "locationFit"):
+            value = raw_breakdown.get(key)
+            if value is None:
+                continue
+
+            try:
+                breakdown[key] = round(max(0.0, min(100.0, float(value))), 2)
+            except Exception:
+                continue
+
         return {
             "status": True,
             "message": "AI scoring completed",
@@ -236,6 +346,7 @@ async def score_job_fit(
                 "aiScore": round(ai_score, 2),
                 "confidence": _normalize_confidence(payload.get("confidence")),
                 "reason": str(payload.get("reason") or "AI scoring completed").strip(),
+                "breakdown": breakdown,
             },
         }
     except Exception as error:

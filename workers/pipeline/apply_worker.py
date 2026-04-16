@@ -26,6 +26,12 @@ def _event_dedupe_key(event_id: str) -> str:
 
 
 def _list_from_value(value) -> list[str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return []
+
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
 
@@ -33,6 +39,12 @@ def _list_from_value(value) -> list[str]:
 
 
 def _dict_from_value(value) -> dict:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return {}
+
     return value if isinstance(value, dict) else {}
 
 

@@ -30,6 +30,15 @@ def _normalize_raw_job(raw_job: dict) -> dict:
     source = (raw_job.get("source") or "ingestion").strip().lower()
     source_url = raw_job.get("source_url")
     external_job_id = raw_job.get("external_job_id")
+    description = raw_job.get("description")
+    requirements = raw_job.get("requirements")
+    employment_type = raw_job.get("employment_type")
+    seniority_hint = raw_job.get("seniority_hint")
+    remote_policy = raw_job.get("remote_policy")
+    tech_stack = raw_job.get("tech_stack")
+    ingestion_relevance_score = raw_job.get("ingestion_relevance_score")
+    ingestion_relevance_reason = raw_job.get("ingestion_relevance_reason")
+    ingestion_exploration_kept = raw_job.get("ingestion_exploration_kept")
 
     if isinstance(location, str):
         location = location.strip() or None
@@ -46,10 +55,75 @@ def _normalize_raw_job(raw_job: dict) -> dict:
     else:
         external_job_id = None
 
+    if isinstance(description, str):
+        description = description.strip() or None
+    else:
+        description = None
+
+    if isinstance(requirements, str):
+        requirements = requirements.strip() or None
+    else:
+        requirements = None
+
+    if isinstance(employment_type, str):
+        employment_type = employment_type.strip() or None
+    else:
+        employment_type = None
+
+    if isinstance(seniority_hint, str):
+        seniority_hint = seniority_hint.strip() or None
+    else:
+        seniority_hint = None
+
+    if isinstance(remote_policy, str):
+        remote_policy = remote_policy.strip() or None
+    else:
+        remote_policy = None
+
+    normalized_stack: list[str] = []
+    seen_stack: set[str] = set()
+    if isinstance(tech_stack, list):
+        for item in tech_stack:
+            token = str(item).strip()
+            if not token:
+                continue
+
+            dedupe_key = token.lower()
+            if dedupe_key in seen_stack:
+                continue
+
+            normalized_stack.append(token)
+            seen_stack.add(dedupe_key)
+
+    try:
+        ingestion_relevance_score = (
+            max(0.0, min(100.0, float(ingestion_relevance_score)))
+            if ingestion_relevance_score is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        ingestion_relevance_score = None
+
+    if isinstance(ingestion_relevance_reason, str):
+        ingestion_relevance_reason = ingestion_relevance_reason.strip() or None
+    else:
+        ingestion_relevance_reason = None
+
+    ingestion_exploration_kept = bool(ingestion_exploration_kept)
+
     return {
         "title": title,
         "company": company,
         "location": location,
+        "description": description,
+        "requirements": requirements,
+        "employment_type": employment_type,
+        "seniority_hint": seniority_hint,
+        "remote_policy": remote_policy,
+        "tech_stack": normalized_stack,
+        "ingestion_relevance_score": ingestion_relevance_score,
+        "ingestion_relevance_reason": ingestion_relevance_reason,
+        "ingestion_exploration_kept": ingestion_exploration_kept,
         "source": source,
         "source_url": source_url,
         "external_job_id": external_job_id,
@@ -100,18 +174,36 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
                     title,
                     company,
                     location,
+                    description,
+                    requirements,
+                    employment_type,
+                    seniority_hint,
+                    remote_policy,
+                    tech_stack,
+                    ingestion_relevance_score,
+                    ingestion_relevance_reason,
+                    ingestion_exploration_kept,
                     source,
                     source_url,
                     external_job_id,
                     status
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'NORMALIZED')
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, 'NORMALIZED')
                 ON CONFLICT (user_id, source, external_job_id)
                 WHERE external_job_id IS NOT NULL
                 DO UPDATE SET
                     title = EXCLUDED.title,
                     company = EXCLUDED.company,
                     location = EXCLUDED.location,
+                    description = EXCLUDED.description,
+                    requirements = EXCLUDED.requirements,
+                    employment_type = EXCLUDED.employment_type,
+                    seniority_hint = EXCLUDED.seniority_hint,
+                    remote_policy = EXCLUDED.remote_policy,
+                    tech_stack = EXCLUDED.tech_stack,
+                    ingestion_relevance_score = EXCLUDED.ingestion_relevance_score,
+                    ingestion_relevance_reason = EXCLUDED.ingestion_relevance_reason,
+                    ingestion_exploration_kept = EXCLUDED.ingestion_exploration_kept,
                     source_url = EXCLUDED.source_url,
                     status = EXCLUDED.status,
                     updated_at = NOW()
@@ -121,6 +213,15 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
                 normalized_job["title"],
                 normalized_job["company"],
                 normalized_job["location"],
+                normalized_job["description"],
+                normalized_job["requirements"],
+                normalized_job["employment_type"],
+                normalized_job["seniority_hint"],
+                normalized_job["remote_policy"],
+                json.dumps(normalized_job["tech_stack"]),
+                normalized_job["ingestion_relevance_score"],
+                normalized_job["ingestion_relevance_reason"],
+                normalized_job["ingestion_exploration_kept"],
                 normalized_job["source"],
                 normalized_job["source_url"],
                 external_job_id,
