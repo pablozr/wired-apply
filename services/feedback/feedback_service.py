@@ -3,25 +3,12 @@ from asyncpg.exceptions import UniqueViolationError
 
 from core.logger.logger import logger
 from schemas.feedback import FeedbackCreateRequest, FeedbackUpdateRequest, feedback_from_row
+from services.weights.weights_service import (
+    DEFAULT_SCORE_WEIGHTS,
+    weights_from_row,
+    weights_to_response,
+)
 from services.rules import adaptive_weights, feedback_policy
-
-
-def _weights_from_row(row: asyncpg.Record) -> dict[str, float]:
-    return {
-        "role_weight": float(row["role_weight"]),
-        "salary_weight": float(row["salary_weight"]),
-        "location_weight": float(row["location_weight"]),
-        "seniority_weight": float(row["seniority_weight"]),
-    }
-
-
-def _weights_to_response(weights: dict[str, float]) -> dict[str, float]:
-    return {
-        "roleWeight": round(weights["role_weight"], 4),
-        "salaryWeight": round(weights["salary_weight"], 4),
-        "locationWeight": round(weights["location_weight"], 4),
-        "seniorityWeight": round(weights["seniority_weight"], 4),
-    }
 
 
 async def _adjust_score_weights_from_feedback(
@@ -59,16 +46,9 @@ async def _adjust_score_weights_from_feedback(
     )
 
     if not row:
-        return _weights_to_response(
-            {
-                "role_weight": 0.35,
-                "salary_weight": 0.25,
-                "location_weight": 0.2,
-                "seniority_weight": 0.2,
-            }
-        )
+        return weights_to_response(DEFAULT_SCORE_WEIGHTS)
 
-    current_weights = _weights_from_row(row)
+    current_weights = weights_from_row(row)
     impact = feedback_policy.feedback_impact_from_rating(rating)
     step = feedback_policy.delta_step_from_rating(rating)
 
@@ -100,7 +80,7 @@ async def _adjust_score_weights_from_feedback(
         user_id,
     )
 
-    return _weights_to_response(adjusted_weights)
+    return weights_to_response(adjusted_weights)
 
 
 async def create_feedback(

@@ -14,12 +14,12 @@ from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
-from core.utils.json_utils import ensure_dict, ensure_str_list
 from services.ai import ai_service
 from services.cache import cache_service
 from services.integrations import playwright_service
 from services.messaging import messaging_service
 from services.rules import application_constraints
+from services.user.user_context_service import get_ai_context
 
 
 async def _publish_retry(payload: dict, reason: str) -> None:
@@ -93,62 +93,10 @@ async def process_apply_event(message: AbstractIncomingMessage) -> None:
                     )
                     return
 
-                profile_row = await conn.fetchrow(
-                    """
-                    SELECT
-                        objective,
-                        seniority,
-                        target_roles,
-                        preferred_locations,
-                        preferred_work_model,
-                        salary_expectation,
-                        must_have_skills,
-                        nice_to_have_skills
-                    FROM user_profiles
-                    WHERE user_id = $1
-                    """,
+                profile_context, resume_context = await get_ai_context(
+                    conn,
                     int(user_id),
                 )
-
-                resume_row = await conn.fetchrow(
-                    """
-                    SELECT extracted_json, parse_status, parse_confidence
-                    FROM user_resumes
-                    WHERE user_id = $1 AND is_active = TRUE
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    int(user_id),
-                )
-
-                profile_context = {}
-                if profile_row:
-                    profile_context = {
-                        "objective": profile_row["objective"],
-                        "seniority": profile_row["seniority"],
-                        "targetRoles": ensure_str_list(profile_row["target_roles"]),
-                        "preferredLocations": ensure_str_list(
-                            profile_row["preferred_locations"]
-                        ),
-                        "preferredWorkModel": profile_row["preferred_work_model"],
-                        "salaryExpectation": profile_row["salary_expectation"],
-                        "mustHaveSkills": ensure_str_list(
-                            profile_row["must_have_skills"]
-                        ),
-                        "niceToHaveSkills": ensure_str_list(
-                            profile_row["nice_to_have_skills"]
-                        ),
-                    }
-
-                resume_context = {}
-                if resume_row:
-                    resume_context = ensure_dict(resume_row["extracted_json"])
-
-                    resume_context["parseStatus"] = resume_row["parse_status"]
-                    parse_confidence = resume_row["parse_confidence"]
-                    resume_context["parseConfidence"] = (
-                        float(parse_confidence) if parse_confidence is not None else None
-                    )
 
                 job_context = {
                     "jobId": int(job_row["id"]),
