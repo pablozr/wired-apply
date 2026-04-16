@@ -208,33 +208,8 @@ async def score_job_fit(
         }
 
     try:
-        raw_job_stack = job_context.get("techStack") or []
-        if not isinstance(raw_job_stack, list):
-            raw_job_stack = []
-
-        raw_target_roles = (profile_context or {}).get("targetRoles") or []
-        if not isinstance(raw_target_roles, list):
-            raw_target_roles = []
-
-        raw_preferred_locations = (profile_context or {}).get("preferredLocations") or []
-        if not isinstance(raw_preferred_locations, list):
-            raw_preferred_locations = []
-
-        raw_must_have = (profile_context or {}).get("mustHaveSkills") or []
-        if not isinstance(raw_must_have, list):
-            raw_must_have = []
-
-        raw_nice_to_have = (profile_context or {}).get("niceToHaveSkills") or []
-        if not isinstance(raw_nice_to_have, list):
-            raw_nice_to_have = []
-
-        raw_resume_skills = (resume_context or {}).get("skills") or []
-        if not isinstance(raw_resume_skills, list):
-            raw_resume_skills = []
-
-        raw_resume_languages = (resume_context or {}).get("languages") or []
-        if not isinstance(raw_resume_languages, list):
-            raw_resume_languages = []
+        profile_context = profile_context or {}
+        resume_context = resume_context or {}
 
         compact_job_context = {
             "jobId": job_context.get("jobId"),
@@ -252,7 +227,7 @@ async def score_job_fit(
             "remotePolicy": job_context.get("remotePolicy"),
             "techStack": [
                 str(item).strip()
-                for item in raw_job_stack[:20]
+                for item in (job_context.get("techStack") or [])[:20]
                 if str(item).strip()
             ],
             "source": job_context.get("source"),
@@ -260,46 +235,46 @@ async def score_job_fit(
         }
 
         compact_profile_context = {
-            "objective": str((profile_context or {}).get("objective") or "").strip()[:400],
-            "seniority": (profile_context or {}).get("seniority"),
+            "objective": str(profile_context.get("objective") or "").strip()[:400],
+            "seniority": profile_context.get("seniority"),
             "targetRoles": [
                 str(item).strip()
-                for item in raw_target_roles[:10]
+                for item in (profile_context.get("targetRoles") or [])[:10]
                 if str(item).strip()
             ],
             "preferredLocations": [
                 str(item).strip()
-                for item in raw_preferred_locations[:10]
+                for item in (profile_context.get("preferredLocations") or [])[:10]
                 if str(item).strip()
             ],
-            "preferredWorkModel": (profile_context or {}).get("preferredWorkModel"),
-            "salaryExpectation": str((profile_context or {}).get("salaryExpectation") or "").strip()[:120],
+            "preferredWorkModel": profile_context.get("preferredWorkModel"),
+            "salaryExpectation": str(profile_context.get("salaryExpectation") or "").strip()[:120],
             "mustHaveSkills": [
                 str(item).strip()
-                for item in raw_must_have[:20]
+                for item in (profile_context.get("mustHaveSkills") or [])[:20]
                 if str(item).strip()
             ],
             "niceToHaveSkills": [
                 str(item).strip()
-                for item in raw_nice_to_have[:20]
+                for item in (profile_context.get("niceToHaveSkills") or [])[:20]
                 if str(item).strip()
             ],
         }
 
         compact_resume_context = {
-            "summary": str((resume_context or {}).get("summary") or "").strip()[:AI_SCORE_SUMMARY_MAX_CHARS],
-            "seniority": (resume_context or {}).get("seniority"),
+            "summary": str(resume_context.get("summary") or "").strip()[:AI_SCORE_SUMMARY_MAX_CHARS],
+            "seniority": resume_context.get("seniority"),
             "skills": [
                 str(item).strip()
-                for item in raw_resume_skills[:30]
+                for item in (resume_context.get("skills") or [])[:30]
                 if str(item).strip()
             ],
             "languages": [
                 str(item).strip()
-                for item in raw_resume_languages[:10]
+                for item in (resume_context.get("languages") or [])[:10]
                 if str(item).strip()
             ],
-            "parseStatus": (resume_context or {}).get("parseStatus"),
+            "parseStatus": resume_context.get("parseStatus"),
         }
 
         user_input = json.dumps(
