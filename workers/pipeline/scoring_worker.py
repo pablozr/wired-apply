@@ -5,6 +5,9 @@ import uuid
 from aio_pika.abc import AbstractIncomingMessage
 
 from core.config.config import (
+    AI_DETERMINISTIC_WEIGHT,
+    AI_SCORING_ENABLED,
+    AI_SCORING_WEIGHT,
     DIGEST_EMAIL_QUEUE,
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
@@ -19,6 +22,7 @@ from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
+from services.ai import ai_service
 from services.cache import cache_service
 from services.messaging import messaging_service
 from services.rules import pipeline_state_machine, scoring_policy
@@ -141,6 +145,96 @@ def _compute_score(weights: dict[str, float], signals: dict[str, float]) -> floa
     return scoring_policy.clamp_score(score)
 
 
+def _compose_final_score(deterministic_score: float, ai_score: float | None) -> float:
+    if ai_score is None:
+        return scoring_policy.clamp_score(deterministic_score)
+
+    deterministic_weight = max(0.0, float(AI_DETERMINISTIC_WEIGHT))
+    ai_weight = max(0.0, float(AI_SCORING_WEIGHT))
+    total_weight = deterministic_weight + ai_weight
+
+    if total_weight <= 0:
+        return scoring_policy.clamp_score(deterministic_score)
+
+    final_score = (
+        (deterministic_weight / total_weight) * deterministic_score
+        + (ai_weight / total_weight) * ai_score
+    )
+
+    return scoring_policy.clamp_score(final_score)
+
+
+def _list_from_value(value) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    return []
+
+
+def _dict_from_value(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+async def _get_ai_context(conn, user_id: int) -> tuple[dict, dict]:
+    profile_row = await conn.fetchrow(
+        """
+        SELECT
+            objective,
+            seniority,
+            target_roles,
+            preferred_locations,
+            preferred_work_model,
+            salary_expectation,
+            must_have_skills,
+            nice_to_have_skills
+        FROM user_profiles
+        WHERE user_id = $1
+        """,
+        user_id,
+    )
+
+    resume_row = await conn.fetchrow(
+        """
+        SELECT
+            extracted_json,
+            parse_status,
+            parse_confidence
+        FROM user_resumes
+        WHERE user_id = $1 AND is_active = TRUE
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        user_id,
+    )
+
+    profile_context = {}
+    if profile_row:
+        profile_context = {
+            "objective": profile_row["objective"],
+            "seniority": profile_row["seniority"],
+            "targetRoles": _list_from_value(profile_row["target_roles"]),
+            "preferredLocations": _list_from_value(profile_row["preferred_locations"]),
+            "preferredWorkModel": profile_row["preferred_work_model"],
+            "salaryExpectation": profile_row["salary_expectation"],
+            "mustHaveSkills": _list_from_value(profile_row["must_have_skills"]),
+            "niceToHaveSkills": _list_from_value(profile_row["nice_to_have_skills"]),
+        }
+
+    resume_context = {}
+    if resume_row:
+        resume_context = _dict_from_value(resume_row["extracted_json"])
+        resume_context["parseStatus"] = resume_row["parse_status"]
+        parse_confidence = resume_row["parse_confidence"]
+        resume_context["parseConfidence"] = (
+            float(parse_confidence) if parse_confidence is not None else None
+        )
+
+    return profile_context, resume_context
+
+
 async def _get_weights(conn, user_id: int) -> dict[str, float]:
     row = await conn.fetchrow(
         """
@@ -196,7 +290,15 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
         async with postgresql.pool.acquire() as conn:
             job_row = await conn.fetchrow(
                 """
-                SELECT id, user_id, title, location, status
+                SELECT
+                    id,
+                    user_id,
+                    title,
+                    company,
+                    location,
+                    source,
+                    source_url,
+                    status
                 FROM jobs
                 WHERE id = $1 AND user_id = $2
                 """,
@@ -215,9 +317,62 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
 
             weights = await _get_weights(conn, int(user_id))
             signals = _signal_from_job(job_row["title"], job_row["location"])
-            score = _compute_score(weights, signals)
-            bucket = scoring_policy.bucket_from_score(score)
+            deterministic_score = _compute_score(weights, signals)
+            ai_score = None
+            ai_confidence = None
+            ai_reason = None
+
+            if AI_SCORING_ENABLED:
+                profile_context, resume_context = await _get_ai_context(conn, int(user_id))
+                ai_response = await ai_service.score_job_fit(
+                    job_context={
+                        "jobId": int(job_row["id"]),
+                        "title": job_row["title"],
+                        "company": job_row["company"],
+                        "location": job_row["location"],
+                        "source": job_row["source"],
+                        "sourceUrl": job_row["source_url"],
+                    },
+                    profile_context=profile_context,
+                    resume_context=resume_context,
+                    deterministic_score=round(deterministic_score, 2),
+                )
+
+                if ai_response.get("status"):
+                    ai_payload = ai_response.get("data", {})
+
+                    try:
+                        ai_score = scoring_policy.clamp_score(
+                            float(ai_payload.get("aiScore"))
+                        )
+                    except (TypeError, ValueError):
+                        ai_score = None
+
+                    try:
+                        raw_confidence = ai_payload.get("confidence")
+                        ai_confidence = (
+                            max(0.0, min(1.0, float(raw_confidence)))
+                            if raw_confidence is not None
+                            else None
+                        )
+                    except (TypeError, ValueError):
+                        ai_confidence = None
+
+                    ai_reason = ai_payload.get("reason")
+                else:
+                    ai_reason = ai_response.get("message")
+
+            final_score = _compose_final_score(deterministic_score, ai_score)
+            score = final_score
+            bucket = scoring_policy.bucket_from_score(final_score)
             reason = _reason_from_signals(signals)
+
+            deterministic_score_rounded = round(deterministic_score, 2)
+            ai_score_rounded = round(ai_score, 2) if ai_score is not None else None
+            ai_confidence_rounded = (
+                round(ai_confidence, 2) if ai_confidence is not None else None
+            )
+            final_score_rounded = round(final_score, 2)
 
             await conn.execute(
                 """
@@ -225,22 +380,37 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     user_id,
                     job_id,
                     score,
+                    deterministic_score,
+                    ai_score,
+                    ai_confidence,
+                    final_score,
                     bucket,
-                    reason
+                    reason,
+                    ai_reason
                 )
-                VALUES ($1, $2, $3, $4, $5)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (user_id, job_id)
                 DO UPDATE SET
                     score = EXCLUDED.score,
+                    deterministic_score = EXCLUDED.deterministic_score,
+                    ai_score = EXCLUDED.ai_score,
+                    ai_confidence = EXCLUDED.ai_confidence,
+                    final_score = EXCLUDED.final_score,
                     bucket = EXCLUDED.bucket,
                     reason = EXCLUDED.reason,
+                    ai_reason = EXCLUDED.ai_reason,
                     updated_at = NOW()
                 """,
                 user_id,
                 job_id,
-                round(score, 2),
+                final_score_rounded,
+                deterministic_score_rounded,
+                ai_score_rounded,
+                ai_confidence_rounded,
+                final_score_rounded,
                 bucket,
                 reason,
+                ai_reason,
             )
 
             current_status = (job_row["status"] or "INGESTED").strip().upper()
@@ -302,11 +472,13 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "scoring_worker_processed run_id=%s user_id=%s job_id=%s score=%.2f bucket=%s",
+            "scoring_worker_processed run_id=%s user_id=%s job_id=%s final_score=%.2f deterministic_score=%.2f ai_score=%s bucket=%s",
             run_id,
             user_id,
             job_id,
             score,
+            deterministic_score_rounded,
+            ai_score_rounded,
             bucket,
         )
 

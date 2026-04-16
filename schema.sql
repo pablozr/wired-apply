@@ -8,6 +8,48 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id                   SERIAL PRIMARY KEY,
+    user_id              INTEGER      NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    objective            TEXT,
+    seniority            VARCHAR(50),
+    target_roles         JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    preferred_locations  JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    preferred_work_model VARCHAR(30),
+    salary_expectation   VARCHAR(100),
+    must_have_skills     JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    nice_to_have_skills  JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    created_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_resumes (
+    id               SERIAL PRIMARY KEY,
+    user_id          INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    file_name        VARCHAR(255) NOT NULL,
+    mime_type        VARCHAR(100) NOT NULL DEFAULT 'application/pdf',
+    file_size        INTEGER      NOT NULL CHECK (file_size > 0),
+    file_hash        VARCHAR(64)  NOT NULL,
+    file_content     BYTEA        NOT NULL,
+    extracted_text   TEXT,
+    extracted_json   JSONB        NOT NULL DEFAULT '{}'::jsonb,
+    parse_status     VARCHAR(30)  NOT NULL DEFAULT 'PENDING',
+    parse_confidence NUMERIC(5,2),
+    is_active        BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS user_resumes_user_created_idx
+    ON user_resumes (user_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_resumes_user_active_idx
+    ON user_resumes (user_id)
+    WHERE is_active = TRUE;
+
+CREATE INDEX IF NOT EXISTS user_resumes_file_hash_idx
+    ON user_resumes (file_hash);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              SERIAL PRIMARY KEY,
     user_id         INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -27,16 +69,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_user_source_external_job_idx
     WHERE external_job_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS job_scores (
-    id         SERIAL PRIMARY KEY,
-    user_id    INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    job_id     INTEGER      NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    score      NUMERIC(5,2) NOT NULL DEFAULT 0,
-    bucket     VARCHAR(1)   NOT NULL DEFAULT 'C',
-    reason     TEXT,
-    created_at TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP    NOT NULL DEFAULT NOW(),
+    id                  SERIAL PRIMARY KEY,
+    user_id             INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    job_id              INTEGER      NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    score               NUMERIC(5,2) NOT NULL DEFAULT 0,
+    deterministic_score NUMERIC(5,2),
+    ai_score            NUMERIC(5,2),
+    ai_confidence       NUMERIC(5,2),
+    final_score         NUMERIC(5,2),
+    bucket              VARCHAR(1)   NOT NULL DEFAULT 'C',
+    reason              TEXT,
+    ai_reason           TEXT,
+    created_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, job_id)
 );
+
+CREATE INDEX IF NOT EXISTS job_scores_user_final_score_idx
+    ON job_scores (user_id, final_score DESC NULLS LAST, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS applications (
     id         SERIAL PRIMARY KEY,
@@ -85,3 +135,20 @@ CREATE TABLE IF NOT EXISTS score_weights (
     created_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMP    NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE job_scores
+    ADD COLUMN IF NOT EXISTS deterministic_score NUMERIC(5,2),
+    ADD COLUMN IF NOT EXISTS ai_score NUMERIC(5,2),
+    ADD COLUMN IF NOT EXISTS ai_confidence NUMERIC(5,2),
+    ADD COLUMN IF NOT EXISTS final_score NUMERIC(5,2),
+    ADD COLUMN IF NOT EXISTS ai_reason TEXT;
+
+UPDATE job_scores
+SET
+    deterministic_score = COALESCE(deterministic_score, score),
+    final_score = COALESCE(final_score, score),
+    score = COALESCE(score, final_score, deterministic_score, 0)
+WHERE
+    deterministic_score IS NULL
+    OR final_score IS NULL
+    OR score IS NULL;

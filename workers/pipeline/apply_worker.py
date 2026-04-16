@@ -14,13 +14,26 @@ from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
+from services.ai import ai_service
 from services.cache import cache_service
+from services.integrations import playwright_service
 from services.messaging import messaging_service
 from services.rules import application_constraints
 
 
 def _event_dedupe_key(event_id: str) -> str:
     return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
+
+
+def _list_from_value(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    return []
+
+
+def _dict_from_value(value) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
 async def _publish_retry(payload: dict, reason: str) -> None:
@@ -70,7 +83,14 @@ async def process_apply_event(message: AbstractIncomingMessage) -> None:
             async with postgresql.pool.acquire() as conn:
                 job_row = await conn.fetchrow(
                     """
-                    SELECT id, status
+                    SELECT
+                        id,
+                        title,
+                        company,
+                        location,
+                        source,
+                        source_url,
+                        status
                     FROM jobs
                     WHERE id = $1 AND user_id = $2
                     """,
@@ -86,6 +106,124 @@ async def process_apply_event(message: AbstractIncomingMessage) -> None:
                         job_id,
                     )
                     return
+
+                profile_row = await conn.fetchrow(
+                    """
+                    SELECT
+                        objective,
+                        seniority,
+                        target_roles,
+                        preferred_locations,
+                        preferred_work_model,
+                        salary_expectation,
+                        must_have_skills,
+                        nice_to_have_skills
+                    FROM user_profiles
+                    WHERE user_id = $1
+                    """,
+                    int(user_id),
+                )
+
+                resume_row = await conn.fetchrow(
+                    """
+                    SELECT extracted_json, parse_status, parse_confidence
+                    FROM user_resumes
+                    WHERE user_id = $1 AND is_active = TRUE
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    int(user_id),
+                )
+
+                profile_context = {}
+                if profile_row:
+                    profile_context = {
+                        "objective": profile_row["objective"],
+                        "seniority": profile_row["seniority"],
+                        "targetRoles": _list_from_value(profile_row["target_roles"]),
+                        "preferredLocations": _list_from_value(
+                            profile_row["preferred_locations"]
+                        ),
+                        "preferredWorkModel": profile_row["preferred_work_model"],
+                        "salaryExpectation": profile_row["salary_expectation"],
+                        "mustHaveSkills": _list_from_value(
+                            profile_row["must_have_skills"]
+                        ),
+                        "niceToHaveSkills": _list_from_value(
+                            profile_row["nice_to_have_skills"]
+                        ),
+                    }
+
+                resume_context = {}
+                if resume_row:
+                    resume_context = _dict_from_value(resume_row["extracted_json"])
+                    resume_context["parseStatus"] = resume_row["parse_status"]
+                    parse_confidence = resume_row["parse_confidence"]
+                    resume_context["parseConfidence"] = (
+                        float(parse_confidence) if parse_confidence is not None else None
+                    )
+
+                job_context = {
+                    "jobId": int(job_row["id"]),
+                    "title": job_row["title"],
+                    "company": job_row["company"],
+                    "location": job_row["location"],
+                    "source": job_row["source"],
+                    "sourceUrl": job_row["source_url"],
+                }
+
+                ai_payload_response = await ai_service.build_auto_apply_payload(
+                    job_context=job_context,
+                    profile_context=profile_context,
+                    resume_context=resume_context,
+                )
+                ai_payload = ai_payload_response.get("data", {})
+
+                playwright_response = await playwright_service.prepare_assisted_apply(
+                    run_id=str(run_id),
+                    user_id=int(user_id),
+                    job_id=int(job_id),
+                    job_context=job_context,
+                    auto_apply_payload=ai_payload,
+                )
+
+                notes_parts = [
+                    "Auto-shortlisted by worker; waiting human confirmation for submit."
+                ]
+
+                ai_confidence = ai_payload.get("confidence")
+                try:
+                    ai_confidence_value = (
+                        float(ai_confidence) if ai_confidence is not None else None
+                    )
+                except (TypeError, ValueError):
+                    ai_confidence_value = None
+
+                if ai_payload_response.get("status"):
+                    if ai_confidence_value is None:
+                        notes_parts.append("AI form payload generated.")
+                    else:
+                        notes_parts.append(
+                            f"AI form payload generated (confidence={ai_confidence_value:.2f})."
+                        )
+                else:
+                    notes_parts.append("AI form payload failed. Using fallback responses.")
+
+                if playwright_response.get("status"):
+                    notes_parts.append("Playwright assisted mode prepared.")
+                else:
+                    notes_parts.append(
+                        "Playwright assisted mode unavailable; queued for manual review."
+                    )
+
+                answers_preview = ai_payload.get("answers")
+                if isinstance(answers_preview, dict) and answers_preview:
+                    serialized_answers = json.dumps(answers_preview)
+                    notes_parts.append(
+                        f"answersPreview={serialized_answers[:450]}"
+                    )
+
+                notes = " ".join(notes_parts)
 
                 job_status = (job_row["status"] or "").strip().upper()
                 application_status = (
@@ -116,7 +254,7 @@ async def process_apply_event(message: AbstractIncomingMessage) -> None:
                     int(job_id),
                     application_status,
                     "ASSISTED",
-                    "Auto-shortlisted by worker; waiting human confirmation for submit.",
+                    notes,
                 )
 
             logger.info(
