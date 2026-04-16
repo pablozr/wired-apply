@@ -89,6 +89,24 @@ Smoke test rapido da pipeline (PowerShell):
 powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
 
+Smoke test de auto-apply com metricas (schema de formulario + payload IA):
+
+```powershell
+copy .\auto_apply_smoke_urls.example.txt .\auto_apply_smoke_urls.txt
+playwright install chromium
+python .\auto_apply_smoke_test.py --urls-file .\auto_apply_smoke_urls.txt --output .\auto_apply_smoke_report.json
+```
+
+Modo recomendado (usa a pipeline real para coletar vagas e sourceUrl automaticamente):
+
+```powershell
+python .\auto_apply_smoke_test.py --from-pipeline --base-url http://localhost:8000 --output .\auto_apply_smoke_report.json
+```
+
+Obs: para `--from-pipeline`, rode tambem os workers (`docker compose --profile workers up --build -d`).
+
+Detalhes de metricas e criterio de aprovacao: `auto_apply_smoke_test.md`
+
 Worker SMTP (opcional):
 
 ```bash
@@ -227,6 +245,24 @@ Quick pipeline smoke test (PowerShell):
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
+
+Auto-apply smoke test with metrics (form schema + AI payload):
+
+```powershell
+copy .\auto_apply_smoke_urls.example.txt .\auto_apply_smoke_urls.txt
+playwright install chromium
+python .\auto_apply_smoke_test.py --urls-file .\auto_apply_smoke_urls.txt --output .\auto_apply_smoke_report.json
+```
+
+Recommended mode (uses the real pipeline to collect jobs/sourceUrl automatically):
+
+```powershell
+python .\auto_apply_smoke_test.py --from-pipeline --base-url http://localhost:8000 --output .\auto_apply_smoke_report.json
+```
+
+Note: `--from-pipeline` requires workers running too (`docker compose --profile workers up --build -d`).
+
+Metrics reference and acceptance baseline: `auto_apply_smoke_test.md`
 
 SMTP worker (optional):
 

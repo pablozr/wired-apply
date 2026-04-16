@@ -1,4 +1,5 @@
 from core.logger.logger import logger
+from urllib.parse import parse_qs, urlparse
 
 FORM_SCHEMA_EVAL_SCRIPT = """
 () => {
@@ -85,12 +86,29 @@ FORM_SCHEMA_EVAL_SCRIPT = """
 
 def detect_ats_provider(source_url: str) -> str:
     normalized = (source_url or "").strip().lower()
-    if "greenhouse.io" in normalized:
+    if not normalized:
+        return "UNKNOWN"
+
+    parsed = urlparse(normalized)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    query = parse_qs(parsed.query or "")
+
+    if "gh_jid" in query:
         return "GREENHOUSE"
-    if "lever.co" in normalized:
+
+    if "greenhouse.io" in host or "greenhouse.io" in normalized:
+        return "GREENHOUSE"
+
+    if "job" in path and "gh_" in (parsed.query or ""):
+        return "GREENHOUSE"
+
+    if "lever.co" in host or "lever.co" in normalized:
         return "LEVER"
-    if "ashbyhq.com" in normalized:
+
+    if "ashbyhq.com" in host or "ashbyhq.com" in normalized:
         return "ASHBY"
+
     return "UNKNOWN"
 
 
@@ -110,7 +128,11 @@ async def extract_apply_form_schema(source_url: str, timeout_ms: int = 20000) ->
         return {
             "status": False,
             "message": f"Playwright is unavailable: {error}",
-            "data": {"provider": provider, "fields": []},
+            "data": {
+                "provider": provider,
+                "fields": [],
+                "errorCode": "PLAYWRIGHT_IMPORT_FAILED",
+            },
         }
 
     try:
@@ -164,11 +186,20 @@ async def extract_apply_form_schema(source_url: str, timeout_ms: int = 20000) ->
             finally:
                 await browser.close()
     except Exception as error:
+        error_message = str(error)
+        error_code = None
+        if "Executable doesn't exist" in error_message:
+            error_code = "PLAYWRIGHT_BROWSER_MISSING"
+
         logger.warning("playwright_extract_schema_failed url=%s error=%s", source_url, error)
         return {
             "status": False,
-            "message": f"Failed to extract apply form schema: {error}",
-            "data": {"provider": provider, "fields": []},
+            "message": f"Failed to extract apply form schema: {error_message}",
+            "data": {
+                "provider": provider,
+                "fields": [],
+                "errorCode": error_code,
+            },
         }
 
 
