@@ -20,54 +20,11 @@ from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
+from core.utils.json_utils import ensure_dict, ensure_str_list
 from services.cache import cache_service
 from services.integrations import ats_service
 from services.messaging import messaging_service
 from services.rules import ingestion_relevance_policy
-
-
-def _event_dedupe_key(event_id: str) -> str:
-    return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
-
-
-def _list_from_value(value) -> list[str]:
-    if value is None:
-        return []
-
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return []
-
-    if not isinstance(value, list):
-        return []
-
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        token = str(item).strip()
-        if not token:
-            continue
-
-        dedupe_key = token.lower()
-        if dedupe_key in seen:
-            continue
-
-        result.append(token)
-        seen.add(dedupe_key)
-
-    return result
-
-
-def _dict_from_value(value) -> dict:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return {}
-
-    return value if isinstance(value, dict) else {}
 
 
 async def _get_candidate_context(user_id: int) -> dict:
@@ -119,19 +76,20 @@ async def _get_candidate_context(user_id: int) -> dict:
             {
                 "objective": profile_row["objective"],
                 "seniority": profile_row["seniority"],
-                "targetRoles": _list_from_value(profile_row["target_roles"]),
-                "preferredLocations": _list_from_value(profile_row["preferred_locations"]),
+                "targetRoles": ensure_str_list(profile_row["target_roles"]),
+                "preferredLocations": ensure_str_list(profile_row["preferred_locations"]),
                 "preferredWorkModel": profile_row["preferred_work_model"],
-                "mustHaveSkills": _list_from_value(profile_row["must_have_skills"]),
-                "niceToHaveSkills": _list_from_value(profile_row["nice_to_have_skills"]),
+                "mustHaveSkills": ensure_str_list(profile_row["must_have_skills"]),
+                "niceToHaveSkills": ensure_str_list(profile_row["nice_to_have_skills"]),
             }
         )
 
     if resume_row:
-        extracted_json = _dict_from_value(resume_row["extracted_json"])
+        extracted_json = ensure_dict(resume_row["extracted_json"])
+
         candidate_context.update(
             {
-                "resumeSkills": _list_from_value(extracted_json.get("skills")),
+                "resumeSkills": ensure_str_list(extracted_json.get("skills")),
                 "resumeSeniority": extracted_json.get("seniority"),
                 "resumeParseStatus": resume_row["parse_status"],
             }
@@ -152,7 +110,7 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             logger.error("ingestion_worker_invalid_event payload=%s", payload)
             return
 
-        dedupe_key = _event_dedupe_key(str(event_id))
+        dedupe_key = f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
         is_new_event = await cache_service.acquire_lock(
             dedupe_key,
             str(event_id),

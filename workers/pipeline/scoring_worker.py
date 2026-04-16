@@ -32,6 +32,7 @@ from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
+from core.utils.json_utils import ensure_dict, ensure_str_list
 from services.ai import ai_service
 from services.cache import cache_service
 from services.messaging import messaging_service
@@ -43,26 +44,6 @@ DEFAULT_SCORE_WEIGHTS = {
     "location_weight": 0.20,
     "seniority_weight": 0.20,
 }
-
-
-def _event_dedupe_key(event_id: str) -> str:
-    return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
-
-
-def _scoring_progress_key(run_id: str) -> str:
-    return f"{PIPELINE_SCORING_PROGRESS_KEY_PREFIX}:{run_id}"
-
-
-def _scoring_failed_key(run_id: str) -> str:
-    return f"{PIPELINE_SCORING_FAILED_KEY_PREFIX}:{run_id}"
-
-
-def _scoring_digest_trigger_key(run_id: str) -> str:
-    return f"{PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX}:{run_id}"
-
-
-def _run_ai_calls_key(run_id: str, user_id: int) -> str:
-    return f"{PIPELINE_RUN_AI_CALLS_KEY_PREFIX}:{run_id}:{user_id}"
 
 
 async def _should_publish_digest(
@@ -78,8 +59,8 @@ async def _should_publish_digest(
 
     try:
         expected_jobs = max(1, int(total_jobs or 1))
-        progress_key = _scoring_progress_key(run_id)
-        failed_key = _scoring_failed_key(run_id)
+        progress_key = f"{PIPELINE_SCORING_PROGRESS_KEY_PREFIX}:{run_id}"
+        failed_key = f"{PIPELINE_SCORING_FAILED_KEY_PREFIX}:{run_id}"
         counter_key = progress_key if scoring_succeeded else failed_key
 
         updated_count = int(await redis_client.incr(counter_key))
@@ -105,7 +86,7 @@ async def _should_publish_digest(
         if finished_count < expected_jobs:
             return False
 
-        trigger_key = _scoring_digest_trigger_key(run_id)
+        trigger_key = f"{PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX}:{run_id}"
         trigger_value = f"{run_id}:{user_id}"
         return await cache_service.acquire_lock(
             trigger_key,
@@ -172,15 +153,15 @@ def _signal_from_context(
     requirements = job_context.get("requirements") or ""
     location = _normalize_text(job_context.get("location"))
     remote_policy = _normalize_text(job_context.get("remotePolicy"))
-    tech_stack = _list_from_value(job_context.get("techStack"))
+    tech_stack = ensure_str_list(job_context.get("techStack"))
 
     title_tokens = _tokenize_text(title)
     job_tokens = _tokenize_text(title, description, requirements, " ".join(tech_stack), location)
 
-    target_roles = _list_from_value(profile_context.get("targetRoles"))
-    must_have_skills = _list_from_value(profile_context.get("mustHaveSkills"))
-    nice_to_have_skills = _list_from_value(profile_context.get("niceToHaveSkills"))
-    resume_skills = _list_from_value(resume_context.get("skills"))
+    target_roles = ensure_str_list(profile_context.get("targetRoles"))
+    must_have_skills = ensure_str_list(profile_context.get("mustHaveSkills"))
+    nice_to_have_skills = ensure_str_list(profile_context.get("niceToHaveSkills"))
+    resume_skills = ensure_str_list(resume_context.get("skills"))
 
     role_match = 0.0
     if target_roles:
@@ -256,7 +237,7 @@ def _signal_from_context(
         salary_signal = max(0.55, min(0.92, 0.60 + 0.40 * skill_overlap))
 
     preferred_work_model = _normalize_text(profile_context.get("preferredWorkModel"))
-    preferred_locations = _list_from_value(profile_context.get("preferredLocations"))
+    preferred_locations = ensure_str_list(profile_context.get("preferredLocations"))
     is_job_remote = "remote" in location or "remote" in remote_policy
     is_job_hybrid = "hybrid" in location or "hybrid" in remote_policy
 
@@ -333,25 +314,25 @@ def _build_ai_context_hash(job_context: dict, profile_context: dict, resume_cont
             "employmentType": job_context.get("employmentType"),
             "seniorityHint": job_context.get("seniorityHint"),
             "remotePolicy": job_context.get("remotePolicy"),
-            "techStack": _list_from_value(job_context.get("techStack")),
+            "techStack": ensure_str_list(job_context.get("techStack")),
             "source": job_context.get("source"),
             "sourceUrl": job_context.get("sourceUrl"),
         },
         "profile": {
             "objective": profile_context.get("objective"),
             "seniority": profile_context.get("seniority"),
-            "targetRoles": _list_from_value(profile_context.get("targetRoles")),
-            "preferredLocations": _list_from_value(profile_context.get("preferredLocations")),
+            "targetRoles": ensure_str_list(profile_context.get("targetRoles")),
+            "preferredLocations": ensure_str_list(profile_context.get("preferredLocations")),
             "preferredWorkModel": profile_context.get("preferredWorkModel"),
             "salaryExpectation": profile_context.get("salaryExpectation"),
-            "mustHaveSkills": _list_from_value(profile_context.get("mustHaveSkills")),
-            "niceToHaveSkills": _list_from_value(profile_context.get("niceToHaveSkills")),
+            "mustHaveSkills": ensure_str_list(profile_context.get("mustHaveSkills")),
+            "niceToHaveSkills": ensure_str_list(profile_context.get("niceToHaveSkills")),
         },
         "resume": {
             "summary": resume_context.get("summary"),
             "seniority": resume_context.get("seniority"),
-            "skills": _list_from_value(resume_context.get("skills")),
-            "languages": _list_from_value(resume_context.get("languages")),
+            "skills": ensure_str_list(resume_context.get("skills")),
+            "languages": ensure_str_list(resume_context.get("languages")),
             "experience": resume_context.get("experience") or [],
             "education": resume_context.get("education") or [],
             "parseStatus": resume_context.get("parseStatus"),
@@ -369,21 +350,21 @@ def _context_quality(job_context: dict, profile_context: dict, resume_context: d
         + 0.10 * bool((job_context.get("location") or "").strip())
         + 0.35 * bool((job_context.get("description") or "").strip())
         + 0.20 * bool((job_context.get("requirements") or "").strip())
-        + 0.10 * bool(_list_from_value(job_context.get("techStack")))
+        + 0.10 * bool(ensure_str_list(job_context.get("techStack")))
     )
 
     profile_quality = (
         0.20 * bool((profile_context.get("objective") or "").strip())
         + 0.20 * bool((profile_context.get("seniority") or "").strip())
-        + 0.20 * bool(_list_from_value(profile_context.get("mustHaveSkills")))
-        + 0.15 * bool(_list_from_value(profile_context.get("targetRoles")))
+        + 0.20 * bool(ensure_str_list(profile_context.get("mustHaveSkills")))
+        + 0.15 * bool(ensure_str_list(profile_context.get("targetRoles")))
         + 0.10 * bool((profile_context.get("salaryExpectation") or "").strip())
         + 0.15 * bool((profile_context.get("preferredWorkModel") or "").strip())
     )
 
     resume_quality = (
         0.30 * bool((resume_context.get("summary") or "").strip())
-        + 0.35 * bool(_list_from_value(resume_context.get("skills")))
+        + 0.35 * bool(ensure_str_list(resume_context.get("skills")))
         + 0.20 * bool(resume_context.get("experience") or [])
         + 0.15
         * (
@@ -438,32 +419,6 @@ def _compose_final_score(
     return scoring_policy.clamp_score(final_score), round(effective_ai_weight, 4), True
 
 
-def _list_from_value(value) -> list[str]:
-    if value is None:
-        return []
-
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return []
-
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-
-    return []
-
-
-def _dict_from_value(value) -> dict:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return {}
-
-    return value if isinstance(value, dict) else {}
-
-
 async def _get_ai_context(conn, user_id: int) -> tuple[dict, dict]:
     profile_row = await conn.fetchrow(
         """
@@ -501,17 +456,17 @@ async def _get_ai_context(conn, user_id: int) -> tuple[dict, dict]:
         profile_context = {
             "objective": profile_row["objective"],
             "seniority": profile_row["seniority"],
-            "targetRoles": _list_from_value(profile_row["target_roles"]),
-            "preferredLocations": _list_from_value(profile_row["preferred_locations"]),
+            "targetRoles": ensure_str_list(profile_row["target_roles"]),
+            "preferredLocations": ensure_str_list(profile_row["preferred_locations"]),
             "preferredWorkModel": profile_row["preferred_work_model"],
             "salaryExpectation": profile_row["salary_expectation"],
-            "mustHaveSkills": _list_from_value(profile_row["must_have_skills"]),
-            "niceToHaveSkills": _list_from_value(profile_row["nice_to_have_skills"]),
+            "mustHaveSkills": ensure_str_list(profile_row["must_have_skills"]),
+            "niceToHaveSkills": ensure_str_list(profile_row["nice_to_have_skills"]),
         }
 
     resume_context = {}
     if resume_row:
-        resume_context = _dict_from_value(resume_row["extracted_json"])
+        resume_context = ensure_dict(resume_row["extracted_json"])
         resume_context["parseStatus"] = resume_row["parse_status"]
         parse_confidence = resume_row["parse_confidence"]
         resume_context["parseConfidence"] = (
@@ -560,7 +515,10 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             logger.error("scoring_worker_invalid_event payload=%s", payload)
             return
 
-        dedupe_key = _event_dedupe_key(str(event_id))
+        user_id_int = int(user_id)
+        job_id_int = int(job_id)
+
+        dedupe_key = f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
         is_new_event = await cache_service.acquire_lock(
             dedupe_key,
             str(event_id),
@@ -594,20 +552,20 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 FROM jobs
                 WHERE id = $1 AND user_id = $2
                 """,
-                job_id,
-                user_id,
+                job_id_int,
+                user_id_int,
             )
 
             if not job_row:
                 logger.error(
                     "scoring_worker_job_not_found run_id=%s user_id=%s job_id=%s",
                     run_id,
-                    user_id,
-                    job_id,
+                    user_id_int,
+                    job_id_int,
                 )
                 return
 
-            weights = await _get_weights(conn, int(user_id))
+            weights = await _get_weights(conn, user_id_int)
             ai_score = None
             ai_confidence = None
             ai_reason = None
@@ -629,11 +587,11 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 "employmentType": job_row["employment_type"],
                 "seniorityHint": job_row["seniority_hint"],
                 "remotePolicy": job_row["remote_policy"],
-                "techStack": _list_from_value(job_row["tech_stack"]),
+                "techStack": ensure_str_list(job_row["tech_stack"]),
                 "source": job_row["source"],
                 "sourceUrl": job_row["source_url"],
             }
-            profile_context, resume_context = await _get_ai_context(conn, int(user_id))
+            profile_context, resume_context = await _get_ai_context(conn, user_id_int)
             signals, signal_details = _signal_from_context(
                 job_context,
                 profile_context,
@@ -655,20 +613,22 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 resume_context,
             )
 
-            existing_score_row = await conn.fetchrow(
-                """
-                SELECT
-                    ai_context_hash,
-                    ai_score,
-                    ai_confidence,
-                    ai_reason,
-                    ai_breakdown
-                FROM job_scores
-                WHERE user_id = $1 AND job_id = $2
-                """,
-                int(user_id),
-                int(job_id),
-            )
+            existing_score_row = None
+            if AI_SCORING_ENABLED and AI_SCORING_CACHE_ENABLED:
+                existing_score_row = await conn.fetchrow(
+                    """
+                    SELECT
+                        ai_context_hash,
+                        ai_score,
+                        ai_confidence,
+                        ai_reason,
+                        ai_breakdown
+                    FROM job_scores
+                    WHERE user_id = $1 AND job_id = $2
+                    """,
+                    user_id_int,
+                    job_id_int,
+                )
 
             if AI_SCORING_ENABLED:
                 if (
@@ -684,7 +644,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                         else None
                     )
                     ai_reason = existing_score_row["ai_reason"]
-                    ai_breakdown = _dict_from_value(existing_score_row["ai_breakdown"])
+                    ai_breakdown = ensure_dict(existing_score_row["ai_breakdown"])
                     ai_cache_hit = True
                     ai_skipped_reason = "cache_hit"
                 elif deterministic_score < float(AI_SCORING_MIN_DETERMINISTIC_SCORE):
@@ -699,7 +659,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     ai_call_allowed = True
                     redis_client = redis_cache.redis
                     if redis_client is not None:
-                        ai_calls_key = _run_ai_calls_key(str(run_id), int(user_id))
+                        ai_calls_key = f"{PIPELINE_RUN_AI_CALLS_KEY_PREFIX}:{run_id}:{user_id_int}"
                         ai_calls_count = int(await redis_client.incr(ai_calls_key))
                         if ai_calls_count == 1:
                             await redis_client.expire(ai_calls_key, PIPELINE_LAST_RUN_TTL_SECONDS)
@@ -736,7 +696,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                                 ai_confidence = None
 
                             ai_reason = ai_payload.get("reason")
-                            ai_breakdown = _dict_from_value(ai_payload.get("breakdown"))
+                            ai_breakdown = ensure_dict(ai_payload.get("breakdown"))
                             ai_skipped_reason = None
                         else:
                             ai_reason = ai_response.get("message")
@@ -800,8 +760,8 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     ai_skipped_reason = EXCLUDED.ai_skipped_reason,
                     updated_at = NOW()
                 """,
-                user_id,
-                job_id,
+                user_id_int,
+                job_id_int,
                 final_score_rounded,
                 deterministic_score_rounded,
                 ai_score_rounded,
@@ -822,8 +782,8 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 await conn.execute(
                     "UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
                     status_after_scoring,
-                    job_id,
-                    user_id,
+                    job_id_int,
+                    user_id_int,
                 )
 
             if bucket == "A" and pipeline_state_machine.can_transition(
@@ -833,8 +793,8 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 await conn.execute(
                     "UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
                     "APPLY_READY",
-                    job_id,
-                    user_id,
+                    job_id_int,
+                    user_id_int,
                 )
 
         if bucket == "A":
@@ -844,8 +804,8 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     "event_id": str(uuid.uuid4()),
                     "event_version": 1,
                     "run_id": run_id,
-                    "user_id": user_id,
-                    "job_id": job_id,
+                    "user_id": user_id_int,
+                    "job_id": job_id_int,
                     "score": round(score, 2),
                     "bucket": bucket,
                     "sequence": sequence,
@@ -857,7 +817,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
 
         if await _should_publish_digest(
             str(run_id),
-            int(user_id),
+            user_id_int,
             total_jobs,
             scoring_succeeded=True,
         ):
@@ -868,7 +828,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     "event_version": 1,
                     "source": "pipeline",
                     "run_id": run_id,
-                    "user_id": user_id,
+                    "user_id": user_id_int,
                 },
                 rabbitmq.channel,
             )
@@ -876,8 +836,8 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
         logger.info(
             "scoring_worker_processed run_id=%s user_id=%s job_id=%s final_score=%.2f deterministic_score=%.2f ai_score=%s ai_confidence=%s context_quality=%.2f role_match=%.2f skill_overlap=%.2f effective_ai_weight=%.4f ai_used=%s ai_cache_hit=%s ai_calls_count=%s ai_skipped_reason=%s ai_delta=%s bucket=%s",
             run_id,
-            user_id,
-            job_id,
+            user_id_int,
+            job_id_int,
             score,
             deterministic_score_rounded,
             ai_score_rounded,

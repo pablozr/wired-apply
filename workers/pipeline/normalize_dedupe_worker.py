@@ -19,83 +19,35 @@ from services.messaging import messaging_service
 from services.rules import deduplication_policy
 
 
-def _event_dedupe_key(event_id: str) -> str:
-    return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
-
-
 def _normalize_raw_job(raw_job: dict) -> dict:
-    title = (raw_job.get("title") or "Unknown Role").strip()
-    company = (raw_job.get("company") or "Unknown Company").strip()
-    location = raw_job.get("location")
-    source = (raw_job.get("source") or "ingestion").strip().lower()
-    source_url = raw_job.get("source_url")
-    external_job_id = raw_job.get("external_job_id")
-    description = raw_job.get("description")
-    requirements = raw_job.get("requirements")
-    employment_type = raw_job.get("employment_type")
-    seniority_hint = raw_job.get("seniority_hint")
-    remote_policy = raw_job.get("remote_policy")
-    tech_stack = raw_job.get("tech_stack")
-    ingestion_relevance_score = raw_job.get("ingestion_relevance_score")
-    ingestion_relevance_reason = raw_job.get("ingestion_relevance_reason")
-    ingestion_exploration_kept = raw_job.get("ingestion_exploration_kept")
-
-    if isinstance(location, str):
-        location = location.strip() or None
-    else:
-        location = None
-
-    if isinstance(source_url, str):
-        source_url = source_url.strip() or None
-    else:
-        source_url = None
-
-    if isinstance(external_job_id, str):
-        external_job_id = external_job_id.strip().lower() or None
-    else:
-        external_job_id = None
-
-    if isinstance(description, str):
-        description = description.strip() or None
-    else:
-        description = None
-
-    if isinstance(requirements, str):
-        requirements = requirements.strip() or None
-    else:
-        requirements = None
-
-    if isinstance(employment_type, str):
-        employment_type = employment_type.strip() or None
-    else:
-        employment_type = None
-
-    if isinstance(seniority_hint, str):
-        seniority_hint = seniority_hint.strip() or None
-    else:
-        seniority_hint = None
-
-    if isinstance(remote_policy, str):
-        remote_policy = remote_policy.strip() or None
-    else:
-        remote_policy = None
+    title = str(raw_job.get("title") or "Unknown Role").strip() or "Unknown Role"
+    company = str(raw_job.get("company") or "Unknown Company").strip() or "Unknown Company"
+    location = str(raw_job.get("location") or "").strip() or None
+    source = str(raw_job.get("source") or "ingestion").strip().lower() or "ingestion"
+    source_url = str(raw_job.get("source_url") or "").strip() or None
+    external_job_id = str(raw_job.get("external_job_id") or "").strip().lower() or None
+    description = str(raw_job.get("description") or "").strip() or None
+    requirements = str(raw_job.get("requirements") or "").strip() or None
+    employment_type = str(raw_job.get("employment_type") or "").strip() or None
+    seniority_hint = str(raw_job.get("seniority_hint") or "").strip() or None
+    remote_policy = str(raw_job.get("remote_policy") or "").strip() or None
 
     normalized_stack: list[str] = []
     seen_stack: set[str] = set()
-    if isinstance(tech_stack, list):
-        for item in tech_stack:
-            token = str(item).strip()
-            if not token:
-                continue
+    for item in (raw_job.get("tech_stack") or []):
+        token = str(item).strip()
+        if not token:
+            continue
 
-            dedupe_key = token.lower()
-            if dedupe_key in seen_stack:
-                continue
+        dedupe_key = token.lower()
+        if dedupe_key in seen_stack:
+            continue
 
-            normalized_stack.append(token)
-            seen_stack.add(dedupe_key)
+        normalized_stack.append(token)
+        seen_stack.add(dedupe_key)
 
     try:
+        ingestion_relevance_score = raw_job.get("ingestion_relevance_score")
         ingestion_relevance_score = (
             max(0.0, min(100.0, float(ingestion_relevance_score)))
             if ingestion_relevance_score is not None
@@ -104,12 +56,10 @@ def _normalize_raw_job(raw_job: dict) -> dict:
     except (TypeError, ValueError):
         ingestion_relevance_score = None
 
-    if isinstance(ingestion_relevance_reason, str):
-        ingestion_relevance_reason = ingestion_relevance_reason.strip() or None
-    else:
-        ingestion_relevance_reason = None
-
-    ingestion_exploration_kept = bool(ingestion_exploration_kept)
+    ingestion_relevance_reason = (
+        str(raw_job.get("ingestion_relevance_reason") or "").strip() or None
+    )
+    ingestion_exploration_kept = bool(raw_job.get("ingestion_exploration_kept"))
 
     return {
         "title": title,
@@ -144,7 +94,7 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
             logger.error("normalize_worker_invalid_event payload=%s", payload)
             return
 
-        dedupe_key = _event_dedupe_key(str(event_id))
+        dedupe_key = f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
         is_new_event = await cache_service.acquire_lock(
             dedupe_key,
             str(event_id),

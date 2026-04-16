@@ -14,38 +14,12 @@ from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
+from core.utils.json_utils import ensure_dict, ensure_str_list
 from services.ai import ai_service
 from services.cache import cache_service
 from services.integrations import playwright_service
 from services.messaging import messaging_service
 from services.rules import application_constraints
-
-
-def _event_dedupe_key(event_id: str) -> str:
-    return f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
-
-
-def _list_from_value(value) -> list[str]:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return []
-
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-
-    return []
-
-
-def _dict_from_value(value) -> dict:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return {}
-
-    return value if isinstance(value, dict) else {}
 
 
 async def _publish_retry(payload: dict, reason: str) -> None:
@@ -78,7 +52,7 @@ async def process_apply_event(message: AbstractIncomingMessage) -> None:
             logger.error("apply_worker_invalid_event payload=%s", payload)
             return
 
-        dedupe_key = _event_dedupe_key(str(event_id))
+        dedupe_key = f"{PIPELINE_EVENT_DEDUPE_KEY_PREFIX}:{event_id}"
         is_new_event = await cache_service.acquire_lock(
             dedupe_key,
             str(event_id),
@@ -152,23 +126,24 @@ async def process_apply_event(message: AbstractIncomingMessage) -> None:
                     profile_context = {
                         "objective": profile_row["objective"],
                         "seniority": profile_row["seniority"],
-                        "targetRoles": _list_from_value(profile_row["target_roles"]),
-                        "preferredLocations": _list_from_value(
+                        "targetRoles": ensure_str_list(profile_row["target_roles"]),
+                        "preferredLocations": ensure_str_list(
                             profile_row["preferred_locations"]
                         ),
                         "preferredWorkModel": profile_row["preferred_work_model"],
                         "salaryExpectation": profile_row["salary_expectation"],
-                        "mustHaveSkills": _list_from_value(
+                        "mustHaveSkills": ensure_str_list(
                             profile_row["must_have_skills"]
                         ),
-                        "niceToHaveSkills": _list_from_value(
+                        "niceToHaveSkills": ensure_str_list(
                             profile_row["nice_to_have_skills"]
                         ),
                     }
 
                 resume_context = {}
                 if resume_row:
-                    resume_context = _dict_from_value(resume_row["extracted_json"])
+                    resume_context = ensure_dict(resume_row["extracted_json"])
+
                     resume_context["parseStatus"] = resume_row["parse_status"]
                     parse_confidence = resume_row["parse_confidence"]
                     resume_context["parseConfidence"] = (

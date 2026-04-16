@@ -1,20 +1,8 @@
-import json
-
-
 def _normalize_text(value) -> str:
     return str(value or "").strip().lower()
 
 
 def _list_from_value(value) -> list[str]:
-    if value is None:
-        return []
-
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return []
-
     if not isinstance(value, list):
         return []
 
