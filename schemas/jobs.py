@@ -1,8 +1,8 @@
-import json
 from typing import TypedDict
 
 import asyncpg
 from pydantic import BaseModel, Field, field_validator
+from core.utils.json_utils import ensure_str_list
 
 
 class JobCreateRequest(BaseModel):
@@ -180,18 +180,7 @@ class JobData(TypedDict):
 
 
 def job_from_row(row: asyncpg.Record) -> JobData:
-    raw_tech_stack = row["tech_stack"]
-    if isinstance(raw_tech_stack, str):
-        try:
-            raw_tech_stack = json.loads(raw_tech_stack)
-        except Exception:
-            raw_tech_stack = []
-
-    tech_stack = (
-        [str(item).strip() for item in raw_tech_stack if str(item).strip()]
-        if isinstance(raw_tech_stack, list)
-        else []
-    )
+    tech_stack = ensure_str_list(row["tech_stack"])
 
     ingestion_relevance_score = row["ingestion_relevance_score"]
 

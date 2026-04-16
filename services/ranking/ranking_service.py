@@ -1,8 +1,7 @@
-import json
-
 import asyncpg
 
 from core.logger.logger import logger
+from core.utils.json_utils import ensure_dict
 from services.rules import scoring_policy
 
 
@@ -71,11 +70,7 @@ async def get_job_score(conn: asyncpg.Connection, user_id: int, job_id: int) -> 
                     "reason": row["reason"],
                     "aiReason": row["ai_reason"],
                     "aiSkippedReason": row["ai_skipped_reason"],
-                    "aiBreakdown": (
-                        json.loads(row["ai_breakdown"])
-                        if isinstance(row["ai_breakdown"], str)
-                        else (row["ai_breakdown"] or {})
-                    ),
+                    "aiBreakdown": ensure_dict(row["ai_breakdown"]),
                     "scoreUpdatedAt": (
                         str(row["score_updated_at"]) if row["score_updated_at"] else None
                     ),
@@ -155,11 +150,7 @@ async def get_daily_ranking(
                 "reason": row["reason"],
                 "aiReason": row["ai_reason"],
                 "aiSkippedReason": row["ai_skipped_reason"],
-                "aiBreakdown": (
-                    json.loads(row["ai_breakdown"])
-                    if isinstance(row["ai_breakdown"], str)
-                    else (row["ai_breakdown"] or {})
-                ),
+                "aiBreakdown": ensure_dict(row["ai_breakdown"]),
                 "scoreUpdatedAt": (
                     row["score_updated_at"].isoformat()
                     if row["score_updated_at"]
