@@ -8,6 +8,7 @@ from core.security import security
 from functions.utils.utils import default_response
 from schemas.pipeline import GlobalIngestionStartRequest, PipelineStartRequest
 from services.pipeline import (
+    global_catalog_cleanup_run_service,
     global_catalog_cleanup_status_service,
     global_ingestion_service,
     pipeline_service,
@@ -72,4 +73,16 @@ async def get_global_catalog_cleanup_status(
     return await default_response(
         global_catalog_cleanup_status_service.get_global_catalog_cleanup_status,
         [redis_client],
+    )
+
+
+@router.post("/global/catalog-cleanup/run")
+async def run_global_catalog_cleanup(
+    user: dict = Depends(security.require_admin_rank()),
+    conn: asyncpg.Connection = Depends(postgresql.get_db),
+    redis_client=Depends(redis_cache.get_redis),
+):
+    return await default_response(
+        global_catalog_cleanup_run_service.run_global_catalog_cleanup,
+        [conn, redis_client, user["userId"], "manual"],
     )
