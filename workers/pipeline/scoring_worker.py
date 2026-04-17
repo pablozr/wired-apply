@@ -20,16 +20,8 @@ from core.config.config import (
     DIGEST_EMAIL_QUEUE,
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
-    PIPELINE_SCORING_FAILED_KEY_PREFIX,
     PIPELINE_LAST_RUN_TTL_SECONDS,
     PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX,
-    PIPELINE_SCORING_PROGRESS_KEY_PREFIX,
-    PIPELINE_RUN_AI_CALLS_KEY_PREFIX,
-    PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
-    PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
-    PIPELINE_RUN_AI_PREFILTER_REASON_KEY_PREFIX,
-    PIPELINE_RUN_AI_PREFILTER_REJECTED_KEY_PREFIX,
-    PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
     SCORING_JOBS_QUEUE,
 )
 from core.logger.logger import logger
@@ -41,6 +33,7 @@ from services.ai import ai_service
 from services.cache import cache_service
 from services.weights.weights_service import get_score_weights
 from services.messaging import messaging_service
+from services.pipeline import pipeline_metrics_service
 from services.rules import pipeline_state_machine, scoring_policy
 from services.rules.scoring_context_policy import (
     AI_PREFILTER_REASON_CODES,
@@ -69,17 +62,23 @@ async def _should_publish_digest(
 
     try:
         expected_jobs = max(1, int(total_jobs or 1))
-        progress_key = f"{PIPELINE_SCORING_PROGRESS_KEY_PREFIX}:{run_id}"
-        failed_key = f"{PIPELINE_SCORING_FAILED_KEY_PREFIX}:{run_id}"
-        counter_key = progress_key if scoring_succeeded else failed_key
+        counter_field = (
+            pipeline_metrics_service.RUN_METRIC_FIELD_JOBS_PROCESSED
+            if scoring_succeeded
+            else pipeline_metrics_service.RUN_METRIC_FIELD_JOBS_FAILED
+        )
+        await pipeline_metrics_service.increment_pipeline_run_metric(
+            run_id,
+            user_id,
+            counter_field,
+            redis_client,
+        )
 
-        updated_count = int(await redis_client.incr(counter_key))
-        if updated_count == 1:
-            await redis_client.expire(counter_key, PIPELINE_LAST_RUN_TTL_SECONDS)
-
-        processed_raw, failed_raw = await redis_client.mget(progress_key, failed_key)
-        processed_count = int(processed_raw or 0)
-        failed_count = int(failed_raw or 0)
+        processed_count, failed_count = await pipeline_metrics_service.get_scoring_progress_counts(
+            run_id,
+            user_id,
+            redis_client,
+        )
         finished_count = processed_count + failed_count
 
         logger.info(
@@ -108,20 +107,6 @@ async def _should_publish_digest(
     except Exception as e:
         logger.exception(e)
         return False
-
-
-async def _increment_run_metric(key_prefix: str, run_id: str, user_id: int) -> None:
-    redis_client = redis_cache.redis
-    if redis_client is None:
-        return
-
-    try:
-        metric_key = f"{key_prefix}:{run_id}:{user_id}"
-        metric_count = int(await redis_client.incr(metric_key))
-        if metric_count == 1:
-            await redis_client.expire(metric_key, PIPELINE_LAST_RUN_TTL_SECONDS)
-    except Exception as e:
-        logger.exception(e)
 
 
 async def process_scoring_event(message: AbstractIncomingMessage) -> None:
@@ -325,10 +310,12 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     ai_call_allowed = True
                     redis_client = redis_cache.redis
                     if redis_client is not None:
-                        ai_calls_key = f"{PIPELINE_RUN_AI_CALLS_KEY_PREFIX}:{run_id}:{user_id_int}"
-                        ai_calls_count = int(await redis_client.incr(ai_calls_key))
-                        if ai_calls_count == 1:
-                            await redis_client.expire(ai_calls_key, PIPELINE_LAST_RUN_TTL_SECONDS)
+                        ai_calls_count = await pipeline_metrics_service.increment_pipeline_run_metric(
+                            str(run_id),
+                            user_id_int,
+                            pipeline_metrics_service.RUN_METRIC_FIELD_AI_CALLS,
+                            redis_client,
+                        )
 
                         if ai_calls_count > max(1, int(AI_MAX_CALLS_PER_RUN)):
                             ai_call_allowed = False
@@ -370,37 +357,44 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             else:
                 ai_skipped_reason = "ai_disabled"
 
+            metrics_redis_client = redis_cache.redis
+
             if AI_SCORING_ENABLED and AI_SCORING_CACHE_ENABLED and not force_rescore:
                 if ai_cache_hit:
-                    await _increment_run_metric(
-                        PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
+                    await pipeline_metrics_service.increment_pipeline_run_metric(
                         str(run_id),
                         user_id_int,
+                        pipeline_metrics_service.RUN_METRIC_FIELD_AI_CACHE_HITS,
+                        metrics_redis_client,
                     )
                 else:
-                    await _increment_run_metric(
-                        PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
+                    await pipeline_metrics_service.increment_pipeline_run_metric(
                         str(run_id),
                         user_id_int,
+                        pipeline_metrics_service.RUN_METRIC_FIELD_AI_CACHE_MISSES,
+                        metrics_redis_client,
                     )
 
             if ai_skipped_reason and ai_skipped_reason != "cache_hit":
-                await _increment_run_metric(
-                    PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
+                await pipeline_metrics_service.increment_pipeline_run_metric(
                     str(run_id),
                     user_id_int,
+                    pipeline_metrics_service.RUN_METRIC_FIELD_AI_SKIPPED,
+                    metrics_redis_client,
                 )
 
             if ai_skipped_reason in AI_PREFILTER_REASON_CODES:
-                await _increment_run_metric(
-                    PIPELINE_RUN_AI_PREFILTER_REJECTED_KEY_PREFIX,
+                await pipeline_metrics_service.increment_pipeline_run_metric(
                     str(run_id),
                     user_id_int,
+                    pipeline_metrics_service.RUN_METRIC_FIELD_AI_PREFILTER_REJECTED,
+                    metrics_redis_client,
                 )
-                await _increment_run_metric(
-                    f"{PIPELINE_RUN_AI_PREFILTER_REASON_KEY_PREFIX}:{ai_skipped_reason}",
+                await pipeline_metrics_service.increment_pipeline_run_metric(
                     str(run_id),
                     user_id_int,
+                    pipeline_metrics_service.build_prefilter_reason_field(ai_skipped_reason),
+                    metrics_redis_client,
                 )
 
             final_score, effective_ai_weight, ai_used = compose_final_score(

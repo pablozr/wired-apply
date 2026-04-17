@@ -116,6 +116,7 @@ INGESTION_RELEVANCE_MIN_JOBS = settings.INGESTION_RELEVANCE_MIN_JOBS
 
 PIPELINE_RUN_LOCK_KEY_PREFIX = "pipeline:run:lock"
 PIPELINE_LAST_RUN_KEY_PREFIX = "pipeline:run:last"
+PIPELINE_RUN_METRICS_KEY_PREFIX = "pipeline:run:metrics"
 PIPELINE_SCORING_PROGRESS_KEY_PREFIX = "pipeline:run:scoring:processed"
 PIPELINE_SCORING_FAILED_KEY_PREFIX = "pipeline:run:scoring:failed"
 PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX = "pipeline:run:scoring:digest_triggered"
