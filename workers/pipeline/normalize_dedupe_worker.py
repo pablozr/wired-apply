@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from datetime import datetime
 
 from aio_pika.abc import AbstractIncomingMessage
 
@@ -15,8 +16,26 @@ from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
 from core.redis.redis import redis_cache
 from services.cache import cache_service
+from services.jobs import global_jobs_service
 from services.messaging import messaging_service
 from services.rules import deduplication_policy
+
+
+def _normalize_source_posted_at(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _normalize_raw_job(raw_job: dict) -> dict:
@@ -77,6 +96,9 @@ def _normalize_raw_job(raw_job: dict) -> dict:
         "source": source,
         "source_url": source_url,
         "external_job_id": external_job_id,
+        "source_posted_at": _normalize_source_posted_at(
+            raw_job.get("source_posted_at")
+        ),
     }
 
 
@@ -121,6 +143,16 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
         external_job_id = normalized_job["external_job_id"] or stable_dedupe_key
 
         async with postgresql.pool.acquire() as conn:
+            try:
+                await global_jobs_service.upsert_global_job(conn, normalized_job)
+            except Exception as error:
+                logger.warning(
+                    "normalize_worker_global_catalog_upsert_failed run_id=%s user_id=%s error=%s",
+                    run_id,
+                    user_id,
+                    error,
+                )
+
             row = await conn.fetchrow(
                 """
                 INSERT INTO jobs (
@@ -140,9 +172,10 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
                     source,
                     source_url,
                     external_job_id,
+                    source_posted_at,
                     status
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, 'NORMALIZED')
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, 'NORMALIZED')
                 ON CONFLICT (user_id, source, external_job_id)
                 WHERE external_job_id IS NOT NULL
                 DO UPDATE SET
@@ -159,6 +192,8 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
                     ingestion_relevance_reason = EXCLUDED.ingestion_relevance_reason,
                     ingestion_exploration_kept = EXCLUDED.ingestion_exploration_kept,
                     source_url = EXCLUDED.source_url,
+                    source_posted_at = COALESCE(EXCLUDED.source_posted_at, jobs.source_posted_at),
+                    last_seen_at = NOW(),
                     status = EXCLUDED.status,
                     updated_at = NOW()
                 RETURNING id
@@ -179,6 +214,7 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
                 normalized_job["source"],
                 normalized_job["source_url"],
                 external_job_id,
+                normalized_job["source_posted_at"],
             )
 
         if not row:
