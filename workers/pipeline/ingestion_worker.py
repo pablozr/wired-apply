@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 import uuid
+from datetime import date, datetime, timedelta
 
 from aio_pika.abc import AbstractIncomingMessage
 
@@ -23,6 +24,7 @@ from core.redis.redis import redis_cache
 from core.utils.json_utils import ensure_dict, ensure_str_list
 from services.cache import cache_service
 from services.integrations import ats_service
+from services.jobs import global_catalog_service
 from services.messaging import messaging_service
 from services.rules import ingestion_relevance_policy
 
@@ -98,6 +100,26 @@ async def _get_candidate_context(user_id: int) -> dict:
     return candidate_context
 
 
+def _resolve_date_window(date_from_value, date_to_value, days_range_value) -> tuple[date, date]:
+    if isinstance(date_from_value, str) and isinstance(date_to_value, str):
+        try:
+            parsed_from = datetime.fromisoformat(date_from_value).date()
+            parsed_to = datetime.fromisoformat(date_to_value).date()
+            if parsed_from <= parsed_to:
+                return parsed_from, parsed_to
+        except ValueError:
+            pass
+
+    safe_days = 7
+    try:
+        safe_days = max(1, min(30, int(days_range_value or 7)))
+    except (TypeError, ValueError):
+        safe_days = 7
+
+    current_date = date.today()
+    return current_date - timedelta(days=safe_days - 1), current_date
+
+
 async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
     async with message.process():
         payload = json.loads(message.body.decode())
@@ -127,12 +149,27 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             logger.info("ingestion_worker_duplicate_event event_id=%s", event_id)
             return
 
-        jobs_result = await ats_service.fetch_jobs(force=force)
+        window_from, window_to = _resolve_date_window(date_from, date_to, days_range)
+
+        jobs_origin = "global_catalog"
+        async with postgresql.pool.acquire() as conn:
+            jobs_result = await global_catalog_service.list_jobs_by_window(
+                conn,
+                window_from,
+                window_to,
+            )
+
+        jobs_data = jobs_result.get("data", {}) if jobs_result.get("status") else {}
+        jobs = jobs_data.get("jobs", [])
+        if not jobs_result.get("status") or not isinstance(jobs, list) or not jobs:
+            jobs_origin = "ats_fetch"
+            jobs_result = await ats_service.fetch_jobs(force=force)
         if not jobs_result["status"]:
             logger.error(
-                "ingestion_worker_ats_fetch_failed run_id=%s user_id=%s message=%s",
+                "ingestion_worker_source_fetch_failed run_id=%s user_id=%s origin=%s message=%s",
                 run_id,
                 user_id,
+                jobs_origin,
                 jobs_result["message"],
             )
             return
@@ -237,7 +274,7 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s filter_enabled=%s candidate_signals=%s sources=%s fallback=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
+            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s filter_enabled=%s candidate_signals=%s sources=%s origin=%s fallback=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
             run_id,
             user_id,
             total_jobs,
@@ -246,6 +283,7 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             filter_enabled,
             candidate_has_signals,
             source_count,
+            jobs_origin,
             fallback_used,
             date_from,
             date_to,
