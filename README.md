@@ -83,11 +83,36 @@ Para derrubar tudo:
 docker compose down
 ```
 
-Smoke test rapido da pipeline (PowerShell):
+Smoke test completo da pipeline (PowerShell):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
+
+Exemplo com parametros:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1 `
+  -BaseUrl "http://localhost:8000" `
+  -PipelineDaysRange 7 `
+  -GlobalDaysRange 14 `
+  -PollIntervalSeconds 5 `
+  -PipelineWaitTimeoutSeconds 240
+```
+
+Para testar endpoints admin, informe credenciais (ou use variaveis de ambiente):
+
+```powershell
+$env:SMOKE_ADMIN_EMAIL="admin@example.com"
+$env:SMOKE_ADMIN_PASSWORD="AdminPass123!"
+powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
+```
+
+Codigos de saida:
+
+- `0`: smoke concluido (com ou sem warnings)
+- `1`: falhas
+- `2`: warnings tratados como falha quando usar `-FailOnWarnings`
 
 Worker SMTP (opcional):
 
@@ -235,11 +260,36 @@ To stop everything:
 docker compose down
 ```
 
-Quick pipeline smoke test (PowerShell):
+Complete pipeline smoke test (PowerShell):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
+
+Example with explicit parameters:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1 `
+  -BaseUrl "http://localhost:8000" `
+  -PipelineDaysRange 7 `
+  -GlobalDaysRange 14 `
+  -PollIntervalSeconds 5 `
+  -PipelineWaitTimeoutSeconds 240
+```
+
+To include admin-only endpoints, provide admin credentials (or set env vars):
+
+```powershell
+$env:SMOKE_ADMIN_EMAIL="admin@example.com"
+$env:SMOKE_ADMIN_PASSWORD="AdminPass123!"
+powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
+```
+
+Exit codes:
+
+- `0`: smoke completed (with or without warnings)
+- `1`: failures detected
+- `2`: warnings treated as failure when using `-FailOnWarnings`
 
 SMTP worker (optional):
 
