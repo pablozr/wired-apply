@@ -2,7 +2,7 @@ import asyncio
 import html
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -83,6 +83,68 @@ def _parse_source_posted_at(value: Any) -> str | None:
         parsed_value = parsed_value.replace(tzinfo=timezone.utc)
 
     return parsed_value.isoformat()
+
+
+
+def _coerce_date(value: Any) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+
+    if isinstance(value, datetime):
+        coerced = value
+        if coerced.tzinfo is None:
+            coerced = coerced.replace(tzinfo=timezone.utc)
+        return coerced.date()
+
+    parsed_iso = _parse_source_posted_at(value)
+    if not parsed_iso:
+        return None
+
+    try:
+        return datetime.fromisoformat(parsed_iso.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _apply_date_window(
+    jobs: list[dict],
+    date_from_value: Any = None,
+    date_to_value: Any = None,
+) -> tuple[list[dict], dict | None]:
+    date_from = _coerce_date(date_from_value)
+    date_to = _coerce_date(date_to_value)
+
+    if date_from is None and date_to is None:
+        return jobs, None
+
+    if date_from is None or date_to is None:
+        return jobs, None
+
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    filtered_jobs: list[dict] = []
+    ignored_without_date = 0
+
+    for job in jobs:
+        posted_date = _coerce_date(job.get("source_posted_at"))
+
+        if posted_date is None:
+            filtered_jobs.append(job)
+            ignored_without_date += 1
+            continue
+
+        if date_from <= posted_date <= date_to:
+            filtered_jobs.append(job)
+
+    return filtered_jobs, {
+        "dateFrom": date_from.isoformat(),
+        "dateTo": date_to.isoformat(),
+        "inputCount": len(jobs),
+        "outputCount": len(filtered_jobs),
+        "jobsWithoutSourceDate": ignored_without_date,
+        "filteredOutByDate": max(0, len(jobs) - len(filtered_jobs)),
+    }
 
 
 TECH_STACK_KEYWORDS = [
@@ -753,7 +815,11 @@ def _dedupe_jobs(jobs: list[dict]) -> list[dict]:
     return deduped
 
 
-async def fetch_jobs(force: bool = False) -> dict:
+async def fetch_jobs(
+    force: bool = False,
+    date_from: Any = None,
+    date_to: Any = None,
+) -> dict:
     greenhouse_boards = _parse_handles(ATS_GREENHOUSE_BOARDS)
     lever_companies = _parse_handles(ATS_LEVER_COMPANIES)
     ashby_organizations = _parse_handles(ATS_ASHBY_ORGANIZATIONS)
@@ -773,6 +839,7 @@ async def fetch_jobs(force: bool = False) -> dict:
     if not configured_targets:
         if ATS_ENABLE_MOCK_FALLBACK:
             jobs = _build_mock_jobs(force)
+            jobs, window_context = _apply_date_window(jobs, date_from, date_to)
             return {
                 "status": True,
                 "message": "No ATS source configured. Using mock ingestion jobs",
@@ -782,6 +849,7 @@ async def fetch_jobs(force: bool = False) -> dict:
                     "fallbackUsed": True,
                     "configuredSources": 0,
                     "successfulSources": 0,
+                    "window": window_context,
                 },
             }
 
@@ -821,11 +889,13 @@ async def fetch_jobs(force: bool = False) -> dict:
             jobs = _build_mock_jobs(force)
             fallback_used = True
 
+        jobs, window_context = _apply_date_window(jobs, date_from, date_to)
+
         if not jobs:
             return {
                 "status": False,
                 "message": "ATS fetch finished with no jobs",
-                "data": {},
+                "data": {"window": window_context},
             }
 
         successful_sources = sum(
@@ -836,6 +906,11 @@ async def fetch_jobs(force: bool = False) -> dict:
         if fallback_used:
             message = f"{message}; mock fallback enabled"
 
+        if window_context:
+            message = (
+                f"{message}; window {window_context['dateFrom']}..{window_context['dateTo']}"
+            )
+
         return {
             "status": True,
             "message": message,
@@ -845,6 +920,7 @@ async def fetch_jobs(force: bool = False) -> dict:
                 "fallbackUsed": fallback_used,
                 "configuredSources": len(configured_targets),
                 "successfulSources": successful_sources,
+                "window": window_context,
             },
         }
     except Exception as error:
@@ -852,6 +928,7 @@ async def fetch_jobs(force: bool = False) -> dict:
 
         if ATS_ENABLE_MOCK_FALLBACK:
             jobs = _build_mock_jobs(force)
+            jobs, window_context = _apply_date_window(jobs, date_from, date_to)
             return {
                 "status": True,
                 "message": "ATS fetch failed. Using mock ingestion jobs",
@@ -861,6 +938,7 @@ async def fetch_jobs(force: bool = False) -> dict:
                     "fallbackUsed": True,
                     "configuredSources": len(configured_targets),
                     "successfulSources": 0,
+                    "window": window_context,
                 },
             }
 

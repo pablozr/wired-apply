@@ -163,7 +163,11 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
         jobs = jobs_data.get("jobs", [])
         if not jobs_result.get("status") or not isinstance(jobs, list) or not jobs:
             jobs_origin = "ats_fetch"
-            jobs_result = await ats_service.fetch_jobs(force=force)
+            jobs_result = await ats_service.fetch_jobs(
+                force=force,
+                date_from=window_from,
+                date_to=window_to,
+            )
         if not jobs_result["status"]:
             logger.error(
                 "ingestion_worker_source_fetch_failed run_id=%s user_id=%s origin=%s message=%s",
