@@ -118,6 +118,12 @@ services:
     profiles: ["workers"]
     command: python -m workers.pipeline.global_ingestion_scheduler_worker
 
+  global-catalog-cleanup-worker:
+    <<: *app-service
+    container_name: wiredapply-global-catalog-cleanup-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.global_catalog_cleanup_worker
+
   normalize-worker:
     <<: *app-service
     container_name: wiredapply-normalize-worker
