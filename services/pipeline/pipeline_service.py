@@ -15,6 +15,7 @@ from core.logger.logger import logger
 from schemas.pipeline import PipelineStartRequest
 from services.cache import cache_service
 from services.messaging import messaging_service
+from services.pipeline import pipeline_metrics_service
 
 
 def _pipeline_lock_key(user_id: int) -> str:
@@ -132,6 +133,20 @@ async def get_pipeline_status(conn: asyncpg.Connection, user_id: int, redis_clie
         active_run_id = active_run if isinstance(active_run, str) else None
         last_run_data = last_run if isinstance(last_run, dict) else None
 
+        active_run_metrics = None
+        if active_run_id:
+            active_run_metrics = await pipeline_metrics_service.build_pipeline_run_metrics(
+                str(active_run_id),
+                int(user_id),
+                redis_client,
+            )
+
+            if (
+                isinstance(last_run_data, dict)
+                and str(last_run_data.get("runId") or "") == str(active_run_id)
+            ):
+                last_run_data = {**last_run_data, "metrics": active_run_metrics}
+
         return {
             "status": True,
             "message": "Pipeline status retrieved successfully",
@@ -143,6 +158,7 @@ async def get_pipeline_status(conn: asyncpg.Connection, user_id: int, redis_clie
                 "activeRunTtlSeconds": (
                     active_run_ttl if active_run_ttl > 0 else None
                 ),
+                "activeRunMetrics": active_run_metrics,
                 "lastRun": last_run_data,
             },
         }
