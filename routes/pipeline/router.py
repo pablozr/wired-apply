@@ -7,7 +7,11 @@ from core.redis.redis import redis_cache
 from core.security import security
 from functions.utils.utils import default_response
 from schemas.pipeline import GlobalIngestionStartRequest, PipelineStartRequest
-from services.pipeline import global_ingestion_service, pipeline_service
+from services.pipeline import (
+    global_catalog_cleanup_status_service,
+    global_ingestion_service,
+    pipeline_service,
+)
 
 router = APIRouter()
 
@@ -56,5 +60,16 @@ async def get_global_ingestion_status(
 ):
     return await default_response(
         global_ingestion_service.get_global_ingestion_status,
+        [redis_client],
+    )
+
+
+@router.get("/global/catalog-cleanup/status")
+async def get_global_catalog_cleanup_status(
+    _user: dict = Depends(security.require_admin_rank()),
+    redis_client=Depends(redis_cache.get_redis),
+):
+    return await default_response(
+        global_catalog_cleanup_status_service.get_global_catalog_cleanup_status,
         [redis_client],
     )
