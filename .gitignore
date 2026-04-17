@@ -9,6 +9,4 @@ dist/
 build/
 .ruff_cache/
 
-# Smoke test outputs
-auto_apply_smoke_report.json
-auto_apply_smoke_urls.txt
+

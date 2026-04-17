@@ -68,7 +68,6 @@ TECH_STACK_KEYWORDS = [
     "c#",
     ".net",
     "terraform",
-    "playwright",
 ]
 
 
@@ -821,3 +820,4 @@ async def get_module_status() -> dict:
             "maxJobsPerSource": ATS_MAX_JOBS_PER_SOURCE,
         },
     }
+

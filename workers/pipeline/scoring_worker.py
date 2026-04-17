@@ -21,7 +21,6 @@ from core.config.config import (
     PIPELINE_SCORING_PROGRESS_KEY_PREFIX,
     PIPELINE_RUN_AI_CALLS_KEY_PREFIX,
     SCORING_JOBS_QUEUE,
-    SHORTLIST_APPLY_QUEUE,
 )
 from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
@@ -373,44 +372,15 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             )
 
             current_status = (job_row["status"] or "INGESTED").strip().upper()
-            status_after_scoring = current_status
             if pipeline_state_machine.can_transition(current_status, "SCORED"):
-                status_after_scoring = "SCORED"
                 await conn.execute(
                     "UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
-                    status_after_scoring,
+                    "SCORED",
                     job_id_int,
                     user_id_int,
                 )
 
-            if bucket == "A" and pipeline_state_machine.can_transition(
-                status_after_scoring,
-                "APPLY_READY",
-            ):
-                await conn.execute(
-                    "UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
-                    "APPLY_READY",
-                    job_id_int,
-                    user_id_int,
-                )
 
-        if bucket == "A":
-            await messaging_service.publish(
-                SHORTLIST_APPLY_QUEUE,
-                {
-                    "event_id": str(uuid.uuid4()),
-                    "event_version": 1,
-                    "run_id": run_id,
-                    "user_id": user_id_int,
-                    "job_id": job_id_int,
-                    "score": round(score, 2),
-                    "bucket": bucket,
-                    "sequence": sequence,
-                    "total_jobs": total_jobs,
-                    "retry_count": 0,
-                },
-                rabbitmq.channel,
-            )
 
         if await _should_publish_digest(
             str(run_id),
@@ -461,7 +431,6 @@ async def run() -> None:
 
     await rabbitmq.channel.set_qos(prefetch_count=1)
     queue = await rabbitmq.channel.declare_queue(SCORING_JOBS_QUEUE, durable=True)
-    await rabbitmq.channel.declare_queue(SHORTLIST_APPLY_QUEUE, durable=True)
     await rabbitmq.channel.declare_queue(DIGEST_EMAIL_QUEUE, durable=True)
     await queue.consume(process_scoring_event)
 
@@ -475,3 +444,4 @@ async def run() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run())
+

@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=16&duration=2500&pause=1000&color=9CA3AF&center=true&vCenter=true&width=980&lines=%5Bboot%5D+postgres+pool+online;%5Bboot%5D+redis+cache+%2B+locks+online;%5Bboot%5D+rabbitmq+channel+online;%5Brun%5D+scheduler+-%3E+pipeline.run+-%3E+workers+chain;%5Bguardrail%5D+final+submit+requires+human+confirmation" alt="runtime typing" />
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=16&duration=2500&pause=1000&color=9CA3AF&center=true&vCenter=true&width=980&lines=%5Bboot%5D+postgres+pool+online;%5Bboot%5D+redis+cache+%2B+locks+online;%5Bboot%5D+rabbitmq+channel+online;%5Brun%5D+scheduler+-%3E+pipeline.run+-%3E+workers+chain" alt="runtime typing" />
 </p>
 
 <p align="center">
@@ -40,11 +40,11 @@ WiredApply e uma API open-source para transformar busca de vagas em operacao dia
 
 - ingestao de vagas
 - ranking por score
-- candidaturas assistidas
+- acompanhamento de candidaturas
 - feedback do usuario para melhorar priorizacao
 - digest diario
 
-A proposta e simples: menos ruido, mais sinal, com controle humano no ponto critico.
+A proposta e simples: menos ruido, mais sinal, com fluxo simples e observavel.
 
 ### Quick Start
 
@@ -89,24 +89,6 @@ Smoke test rapido da pipeline (PowerShell):
 powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
 
-Smoke test de auto-apply com metricas (schema de formulario + payload IA):
-
-```powershell
-copy .\auto_apply_smoke_urls.example.txt .\auto_apply_smoke_urls.txt
-playwright install chromium
-python .\auto_apply_smoke_test.py --urls-file .\auto_apply_smoke_urls.txt --output .\auto_apply_smoke_report.json
-```
-
-Modo recomendado (usa a pipeline real para coletar vagas e sourceUrl automaticamente):
-
-```powershell
-python .\auto_apply_smoke_test.py --from-pipeline --base-url http://localhost:8000 --output .\auto_apply_smoke_report.json
-```
-
-Obs: para `--from-pipeline`, rode tambem os workers (`docker compose --profile workers up --build -d`).
-
-Detalhes de metricas e criterio de aprovacao: `auto_apply_smoke_test.md`
-
 Worker SMTP (opcional):
 
 ```bash
@@ -137,9 +119,7 @@ Detalhe por etapa:
 |---|---|---|
 | `ingestion.jobs` | `ingestion_worker` | vagas coletadas para `jobs.normalized` |
 | `jobs.normalized` | `normalize_dedupe_worker` | vagas limpas + dedupe + envio para `scoring.jobs` |
-| `scoring.jobs` | `scoring_worker` | score salvo + shortlist em `shortlist.apply` |
-| `shortlist.apply` | `apply_worker` | atualiza `applications` |
-| `retry.apply` | `retry_worker` | reprocessa falha tecnica com backoff |
+| `scoring.jobs` | `scoring_worker` | score salvo e atualizado em `jobs` |
 | `digest.email` | `digest_worker` | prepara resumo diario para envio |
 
 Pipeline status (MVP target):
@@ -148,8 +128,6 @@ Pipeline status (MVP target):
   <img src="https://img.shields.io/badge/ingestion.jobs-worker%20chain-1F2937?style=flat-square" alt="ingestion badge" />
   <img src="https://img.shields.io/badge/jobs.normalized-dedupe%20stage-1F2937?style=flat-square" alt="normalized badge" />
   <img src="https://img.shields.io/badge/scoring.jobs-ranking%20stage-1F2937?style=flat-square" alt="scoring badge" />
-  <img src="https://img.shields.io/badge/shortlist.apply-apply%20stage-1F2937?style=flat-square" alt="apply badge" />
-  <img src="https://img.shields.io/badge/retry.apply-backoff%20stage-1F2937?style=flat-square" alt="retry badge" />
   <img src="https://img.shields.io/badge/digest.email-notify%20stage-1F2937?style=flat-square" alt="digest badge" />
 </p>
 
@@ -181,7 +159,7 @@ Pipeline status (MVP target):
 - nao versione segredos
 - use `.env`
 - valide ownership (`user_id`) em toda query de usuario
-- mantenha confirmacao humana para submit final no MVP
+- mantenha validacoes de seguranca no MVP
 
 ### Licenca
 
@@ -197,11 +175,11 @@ WiredApply is an open-source API for daily job-search operations.
 
 - job ingestion
 - score-based ranking
-- assisted applications
+- application tracking
 - feedback-driven tuning
 - digest delivery
 
-Core idea: less noise, more signal, with human control at the final submit step.
+Core idea: less noise, more signal, with a simple and observable flow.
 
 ### Quick Start
 
@@ -245,24 +223,6 @@ Quick pipeline smoke test (PowerShell):
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pipeline_smoke_test.ps1
 ```
-
-Auto-apply smoke test with metrics (form schema + AI payload):
-
-```powershell
-copy .\auto_apply_smoke_urls.example.txt .\auto_apply_smoke_urls.txt
-playwright install chromium
-python .\auto_apply_smoke_test.py --urls-file .\auto_apply_smoke_urls.txt --output .\auto_apply_smoke_report.json
-```
-
-Recommended mode (uses the real pipeline to collect jobs/sourceUrl automatically):
-
-```powershell
-python .\auto_apply_smoke_test.py --from-pipeline --base-url http://localhost:8000 --output .\auto_apply_smoke_report.json
-```
-
-Note: `--from-pipeline` requires workers running too (`docker compose --profile workers up --build -d`).
-
-Metrics reference and acceptance baseline: `auto_apply_smoke_test.md`
 
 SMTP worker (optional):
 
@@ -316,8 +276,9 @@ python -m workers.smtp.email_worker
 - do not commit secrets
 - use `.env`
 - enforce ownership (`user_id`) in every user query
-- keep human confirmation for final submit in MVP
+- keep security validations in place for MVP
 
 ### License
 
 MIT. See `LICENSE`.
+

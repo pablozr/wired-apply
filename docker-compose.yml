@@ -118,17 +118,6 @@ services:
     profiles: ["workers"]
     command: python -m workers.pipeline.scoring_worker
 
-  apply-worker:
-    <<: *app-service
-    container_name: wiredapply-apply-worker
-    profiles: ["workers"]
-    command: python -m workers.pipeline.apply_worker
-
-  retry-worker:
-    <<: *app-service
-    container_name: wiredapply-retry-worker
-    profiles: ["workers"]
-    command: python -m workers.pipeline.retry_worker
 
   digest-worker:
     <<: *app-service
@@ -146,3 +135,4 @@ volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+
