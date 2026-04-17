@@ -33,6 +33,11 @@ async def start_pipeline_run(
 ) -> dict:
     run_id = str(uuid.uuid4())
     queued_at = datetime.now(timezone.utc).isoformat()
+    date_from, date_to = data.resolve_window()
+    date_from_iso = date_from.isoformat()
+    date_to_iso = date_to.isoformat()
+    days_range = ((date_to - date_from).days + 1)
+    force_rescore = bool(data.force_rescore)
     lock_key = _pipeline_lock_key(user_id)
 
     try:
@@ -58,6 +63,10 @@ async def start_pipeline_run(
                 "run_id": run_id,
                 "user_id": user_id,
                 "force": data.force,
+                "force_rescore": force_rescore,
+                "date_from": date_from_iso,
+                "date_to": date_to_iso,
+                "days_range": days_range,
                 "queued_at": queued_at,
             },
             channel,
@@ -72,6 +81,10 @@ async def start_pipeline_run(
                     "status": "QUEUED",
                     "queuedAt": queued_at,
                     "force": data.force,
+                    "forceRescore": force_rescore,
+                    "dateFrom": date_from_iso,
+                    "dateTo": date_to_iso,
+                    "daysRange": days_range,
                 },
                 redis_client,
             )
@@ -84,6 +97,10 @@ async def start_pipeline_run(
             "data": {
                 "runId": run_id,
                 "lockTtlSeconds": PIPELINE_RUN_LOCK_TTL_SECONDS,
+                "dateFrom": date_from_iso,
+                "dateTo": date_to_iso,
+                "daysRange": days_range,
+                "forceRescore": force_rescore,
             },
         }
     except Exception as e:

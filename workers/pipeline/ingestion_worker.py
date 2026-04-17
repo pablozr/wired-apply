@@ -105,6 +105,10 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
         run_id = payload.get("run_id")
         user_id = payload.get("user_id")
         force = bool(payload.get("force", False))
+        force_rescore = bool(payload.get("force_rescore", False))
+        date_from = payload.get("date_from")
+        date_to = payload.get("date_to")
+        days_range = payload.get("days_range")
 
         if not event_id or not run_id or not user_id:
             logger.error("ingestion_worker_invalid_event payload=%s", payload)
@@ -221,6 +225,10 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
                     "event_version": 1,
                     "run_id": run_id,
                     "user_id": user_id,
+                    "force_rescore": force_rescore,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "days_range": days_range,
                     "sequence": index,
                     "total_jobs": total_jobs,
                     "raw_job": raw_job,
@@ -229,7 +237,7 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s filter_enabled=%s candidate_signals=%s sources=%s fallback=%s",
+            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s filter_enabled=%s candidate_signals=%s sources=%s fallback=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
             run_id,
             user_id,
             total_jobs,
@@ -239,6 +247,10 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             candidate_has_signals,
             source_count,
             fallback_used,
+            date_from,
+            date_to,
+            days_range,
+            force_rescore,
         )
 
 

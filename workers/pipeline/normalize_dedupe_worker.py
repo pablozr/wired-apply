@@ -87,6 +87,10 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
         run_id = payload.get("run_id")
         user_id = payload.get("user_id")
         raw_job = payload.get("raw_job") or {}
+        force_rescore = bool(payload.get("force_rescore", False))
+        date_from = payload.get("date_from")
+        date_to = payload.get("date_to")
+        days_range = payload.get("days_range")
         sequence = int(payload.get("sequence") or 1)
         total_jobs = int(payload.get("total_jobs") or 1)
 
@@ -189,6 +193,10 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
                 "run_id": run_id,
                 "user_id": user_id,
                 "job_id": row["id"],
+                "force_rescore": force_rescore,
+                "date_from": date_from,
+                "date_to": date_to,
+                "days_range": days_range,
                 "sequence": sequence,
                 "total_jobs": total_jobs,
                 "dedupe_key": stable_dedupe_key,
@@ -197,12 +205,16 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
         )
 
         logger.info(
-            "normalize_worker_processed run_id=%s user_id=%s job_id=%s sequence=%s/%s",
+            "normalize_worker_processed run_id=%s user_id=%s job_id=%s sequence=%s/%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
             run_id,
             user_id,
             row["id"],
             sequence,
             total_jobs,
+            date_from,
+            date_to,
+            days_range,
+            force_rescore,
         )
 
 

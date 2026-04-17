@@ -106,6 +106,10 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
         job_id = payload.get("job_id")
         sequence = int(payload.get("sequence") or 1)
         total_jobs = int(payload.get("total_jobs") or 1)
+        force_rescore = bool(payload.get("force_rescore", False))
+        date_from = payload.get("date_from")
+        date_to = payload.get("date_to")
+        days_range = payload.get("days_range")
 
         if not event_id or not run_id or not user_id or not job_id:
             logger.error("scoring_worker_invalid_event payload=%s", payload)
@@ -229,6 +233,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             if AI_SCORING_ENABLED:
                 if (
                     AI_SCORING_CACHE_ENABLED
+                    and not force_rescore
                     and existing_score_row
                     and existing_score_row["ai_context_hash"] == ai_context_hash
                     and existing_score_row["ai_score"] is not None
@@ -401,10 +406,16 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "scoring_worker_processed run_id=%s user_id=%s job_id=%s final_score=%.2f deterministic_score=%.2f ai_score=%s ai_confidence=%s context_quality=%.2f role_match=%.2f skill_overlap=%.2f effective_ai_weight=%.4f ai_used=%s ai_cache_hit=%s ai_calls_count=%s ai_skipped_reason=%s ai_delta=%s bucket=%s",
+            "scoring_worker_processed run_id=%s user_id=%s job_id=%s sequence=%s/%s date_from=%s date_to=%s days_range=%s force_rescore=%s final_score=%.2f deterministic_score=%.2f ai_score=%s ai_confidence=%s context_quality=%.2f role_match=%.2f skill_overlap=%.2f effective_ai_weight=%.4f ai_used=%s ai_cache_hit=%s ai_calls_count=%s ai_skipped_reason=%s ai_delta=%s bucket=%s",
             run_id,
             user_id_int,
             job_id_int,
+            sequence,
+            total_jobs,
+            date_from,
+            date_to,
+            days_range,
+            force_rescore,
             score,
             deterministic_score_rounded,
             ai_score_rounded,
