@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from core.config.config import (
+    GLOBAL_INGESTION_DEFAULT_DAYS_RANGE,
     GLOBAL_INGESTION_SCHEDULE_HOUR_UTC,
     GLOBAL_INGESTION_SCHEDULER_INTERVAL_SECONDS,
 )
@@ -44,7 +45,10 @@ async def _tick_scheduler() -> None:
 
     result = await global_ingestion_service.start_global_ingestion_run(
         rabbitmq.channel,
-        GlobalIngestionStartRequest(force=False),
+        GlobalIngestionStartRequest(
+            force=False,
+            daysRange=GLOBAL_INGESTION_DEFAULT_DAYS_RANGE,
+        ),
         redis_cache.redis,
         requested_by_user_id=None,
     )

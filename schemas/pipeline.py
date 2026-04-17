@@ -41,3 +41,6 @@ class PipelineStartRequest(BaseModel):
 
 class GlobalIngestionStartRequest(BaseModel):
     force: bool = False
+    days_range: int = Field(default=14, ge=1, le=30, alias="daysRange")
+
+    model_config = {"populate_by_name": True}

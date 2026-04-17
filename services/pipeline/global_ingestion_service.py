@@ -33,6 +33,7 @@ async def start_global_ingestion_run(
     run_id = str(uuid.uuid4())
     queued_at = datetime.now(timezone.utc).isoformat()
     lock_key = _global_ingestion_lock_key()
+    safe_days_range = max(1, min(30, int(data.days_range)))
 
     try:
         acquired = await cache_service.acquire_lock(
@@ -56,6 +57,7 @@ async def start_global_ingestion_run(
                 "event_version": 1,
                 "run_id": run_id,
                 "force": bool(data.force),
+                "days_range": safe_days_range,
                 "requested_by_user_id": requested_by_user_id,
                 "queued_at": queued_at,
             },
@@ -71,6 +73,7 @@ async def start_global_ingestion_run(
                     "status": "QUEUED",
                     "queuedAt": queued_at,
                     "force": bool(data.force),
+                    "daysRange": safe_days_range,
                     "requestedByUserId": requested_by_user_id,
                 },
                 redis_client,
@@ -83,6 +86,7 @@ async def start_global_ingestion_run(
             "message": "Global ingestion run queued",
             "data": {
                 "runId": run_id,
+                "daysRange": safe_days_range,
                 "lockTtlSeconds": GLOBAL_INGESTION_RUN_LOCK_TTL_SECONDS,
             },
         }
