@@ -2,6 +2,7 @@ import asyncio
 import html
 import hashlib
 import re
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -42,6 +43,46 @@ def _clean_text(value: Any) -> str | None:
         normalized = str(value).strip()
 
     return normalized or None
+
+
+def _parse_source_posted_at(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        parsed_value = value
+        if parsed_value.tzinfo is None:
+            parsed_value = parsed_value.replace(tzinfo=timezone.utc)
+        return parsed_value.isoformat()
+
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000.0
+
+        try:
+            parsed_value = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            return parsed_value.isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    numeric_value = normalized.replace(".", "", 1)
+    if numeric_value.isdigit():
+        return _parse_source_posted_at(float(normalized))
+
+    try:
+        parsed_value = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed_value.tzinfo is None:
+        parsed_value = parsed_value.replace(tzinfo=timezone.utc)
+
+    return parsed_value.isoformat()
 
 
 TECH_STACK_KEYWORDS = [
@@ -203,6 +244,8 @@ def _stable_external_job_id(
 
 
 def _build_mock_jobs(force: bool) -> list[dict]:
+    source_posted_at = datetime.now(timezone.utc).isoformat()
+
     jobs = [
         {
             "title": "Backend Engineer",
@@ -217,6 +260,7 @@ def _build_mock_jobs(force: bool) -> list[dict]:
             "source": "ingestion",
             "source_url": "https://jobs.example.com/backend-engineer",
             "external_job_id": "wa-backend-engineer",
+            "source_posted_at": source_posted_at,
         },
         {
             "title": "Python Developer",
@@ -231,6 +275,7 @@ def _build_mock_jobs(force: bool) -> list[dict]:
             "source": "ingestion",
             "source_url": "https://jobs.example.com/python-developer",
             "external_job_id": "wa-python-developer",
+            "source_posted_at": source_posted_at,
         },
         {
             "title": "Data Engineer",
@@ -245,6 +290,7 @@ def _build_mock_jobs(force: bool) -> list[dict]:
             "source": "ingestion",
             "source_url": "https://jobs.example.com/data-engineer",
             "external_job_id": "wa-data-engineer",
+            "source_posted_at": source_posted_at,
         },
     ]
 
@@ -263,6 +309,7 @@ def _build_mock_jobs(force: bool) -> list[dict]:
                 "source": "ingestion",
                 "source_url": "https://jobs.example.com/sre",
                 "external_job_id": "wa-sre-engineer",
+                "source_posted_at": source_posted_at,
             }
         )
 
@@ -313,6 +360,11 @@ async def _fetch_greenhouse_jobs(
             location = _clean_text(location_value)
 
         source_url = _clean_text(raw_job.get("absolute_url"))
+        source_posted_at = _parse_source_posted_at(
+            raw_job.get("updated_at")
+            or raw_job.get("first_published")
+            or raw_job.get("created_at")
+        )
         external_job_id = _stable_external_job_id(
             "greenhouse",
             board_token,
@@ -415,6 +467,7 @@ async def _fetch_greenhouse_jobs(
                 "source": "greenhouse",
                 "source_url": source_url,
                 "external_job_id": external_job_id,
+                "source_posted_at": source_posted_at,
             }
         )
 
@@ -453,6 +506,9 @@ async def _fetch_lever_jobs(
 
         source_url = _clean_text(raw_job.get("hostedUrl")) or _clean_text(
             raw_job.get("applyUrl")
+        )
+        source_posted_at = _parse_source_posted_at(
+            raw_job.get("createdAt") or raw_job.get("updatedAt")
         )
         external_job_id = _stable_external_job_id(
             "lever",
@@ -524,6 +580,7 @@ async def _fetch_lever_jobs(
                 "source": "lever",
                 "source_url": source_url,
                 "external_job_id": external_job_id,
+                "source_posted_at": source_posted_at,
             }
         )
 
@@ -557,6 +614,11 @@ async def _fetch_ashby_jobs(
         location = _clean_text(raw_job.get("location"))
         source_url = _clean_text(raw_job.get("jobUrl")) or _clean_text(
             raw_job.get("applyUrl")
+        )
+        source_posted_at = _parse_source_posted_at(
+            raw_job.get("publishedAt")
+            or raw_job.get("createdAt")
+            or raw_job.get("updatedAt")
         )
         external_job_id = _stable_external_job_id(
             "ashby",
@@ -608,6 +670,7 @@ async def _fetch_ashby_jobs(
                 "source": "ashby",
                 "source_url": source_url,
                 "external_job_id": external_job_id,
+                "source_posted_at": source_posted_at,
             }
         )
 
