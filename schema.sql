@@ -144,6 +144,12 @@ CREATE TABLE IF NOT EXISTS job_scores (
     ai_reason           TEXT,
     ai_breakdown        JSONB,
     ai_context_hash     VARCHAR(64),
+    ai_job_hash         VARCHAR(64),
+    ai_profile_version  VARCHAR(64),
+    ai_resume_version   VARCHAR(64),
+    ai_prompt_version   VARCHAR(64),
+    ai_model_version    VARCHAR(120),
+    ai_cache_key        VARCHAR(64),
     ai_skipped_reason   TEXT,
     created_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
@@ -155,6 +161,9 @@ CREATE INDEX IF NOT EXISTS job_scores_user_final_score_idx
 
 CREATE INDEX IF NOT EXISTS job_scores_user_context_hash_idx
     ON job_scores (user_id, ai_context_hash);
+
+CREATE INDEX IF NOT EXISTS job_scores_user_cache_key_idx
+    ON job_scores (user_id, ai_cache_key);
 
 CREATE TABLE IF NOT EXISTS applications (
     id         SERIAL PRIMARY KEY,
@@ -212,6 +221,12 @@ ALTER TABLE job_scores
     ADD COLUMN IF NOT EXISTS ai_reason TEXT,
     ADD COLUMN IF NOT EXISTS ai_breakdown JSONB,
     ADD COLUMN IF NOT EXISTS ai_context_hash VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS ai_job_hash VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS ai_profile_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS ai_resume_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS ai_prompt_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS ai_model_version VARCHAR(120),
+    ADD COLUMN IF NOT EXISTS ai_cache_key VARCHAR(64),
     ADD COLUMN IF NOT EXISTS ai_skipped_reason TEXT;
 
 ALTER TABLE jobs

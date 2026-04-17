@@ -4,8 +4,10 @@ import uuid
 
 from aio_pika.abc import AbstractIncomingMessage
 
+from prompts.ai_prompts import SCORING_PROMPT
 from core.config.config import (
     AI_MAX_CALLS_PER_RUN,
+    AI_TYR_MODEL,
     AI_MIN_CONTEXT_QUALITY,
     AI_SCORING_CACHE_ENABLED,
     AI_SCORING_ENABLED,
@@ -33,6 +35,7 @@ from services.weights.weights_service import get_score_weights
 from services.messaging import messaging_service
 from services.rules import pipeline_state_machine, scoring_policy
 from services.rules.scoring_context_policy import (
+    build_ai_cache_versions,
     build_ai_context_hash,
     compose_final_score,
     compute_score,
@@ -212,6 +215,19 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 profile_context,
                 resume_context,
             )
+            cache_versions = build_ai_cache_versions(
+                job_context,
+                profile_context,
+                resume_context,
+                SCORING_PROMPT,
+                AI_TYR_MODEL,
+            )
+            ai_job_hash = cache_versions["jobHash"]
+            ai_profile_version = cache_versions["profileVersion"]
+            ai_resume_version = cache_versions["resumeVersion"]
+            ai_prompt_version = cache_versions["promptVersion"]
+            ai_model_version = cache_versions["modelVersion"]
+            ai_cache_key = cache_versions["cacheKey"]
 
             existing_score_row = None
             if AI_SCORING_ENABLED and AI_SCORING_CACHE_ENABLED:
@@ -219,6 +235,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     """
                     SELECT
                         ai_context_hash,
+                        ai_cache_key,
                         ai_score,
                         ai_confidence,
                         ai_reason,
@@ -230,12 +247,22 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     job_id_int,
                 )
 
+            cache_signature_matches = False
+            if existing_score_row:
+                cached_cache_key = str(existing_score_row["ai_cache_key"] or "").strip()
+                if cached_cache_key:
+                    cache_signature_matches = cached_cache_key == ai_cache_key
+                else:
+                    cache_signature_matches = (
+                        existing_score_row["ai_context_hash"] == ai_context_hash
+                    )
+
             if AI_SCORING_ENABLED:
                 if (
                     AI_SCORING_CACHE_ENABLED
                     and not force_rescore
                     and existing_score_row
-                    and existing_score_row["ai_context_hash"] == ai_context_hash
+                    and cache_signature_matches
                     and existing_score_row["ai_score"] is not None
                 ):
                     ai_score = scoring_policy.clamp_score(float(existing_score_row["ai_score"]))
@@ -343,9 +370,15 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     ai_reason,
                     ai_breakdown,
                     ai_context_hash,
+                    ai_job_hash,
+                    ai_profile_version,
+                    ai_resume_version,
+                    ai_prompt_version,
+                    ai_model_version,
+                    ai_cache_key,
                     ai_skipped_reason
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19)
                 ON CONFLICT (user_id, job_id)
                 DO UPDATE SET
                     score = EXCLUDED.score,
@@ -358,6 +391,12 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     ai_reason = EXCLUDED.ai_reason,
                     ai_breakdown = EXCLUDED.ai_breakdown,
                     ai_context_hash = EXCLUDED.ai_context_hash,
+                    ai_job_hash = EXCLUDED.ai_job_hash,
+                    ai_profile_version = EXCLUDED.ai_profile_version,
+                    ai_resume_version = EXCLUDED.ai_resume_version,
+                    ai_prompt_version = EXCLUDED.ai_prompt_version,
+                    ai_model_version = EXCLUDED.ai_model_version,
+                    ai_cache_key = EXCLUDED.ai_cache_key,
                     ai_skipped_reason = EXCLUDED.ai_skipped_reason,
                     updated_at = NOW()
                 """,
@@ -373,6 +412,12 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 ai_reason,
                 json.dumps(ai_breakdown) if ai_breakdown else None,
                 ai_context_hash,
+                ai_job_hash,
+                ai_profile_version,
+                ai_resume_version,
+                ai_prompt_version,
+                ai_model_version,
+                ai_cache_key,
                 ai_skipped_reason,
             )
 

@@ -255,6 +255,78 @@ def build_ai_context_hash(job_context: dict, profile_context: dict, resume_conte
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _hash_payload(payload: dict) -> str:
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def build_ai_cache_versions(
+    job_context: dict,
+    profile_context: dict,
+    resume_context: dict,
+    scoring_prompt: str,
+    model_name: str,
+) -> dict[str, str]:
+    job_payload = {
+        "title": job_context.get("title"),
+        "company": job_context.get("company"),
+        "location": job_context.get("location"),
+        "description": job_context.get("description"),
+        "requirements": job_context.get("requirements"),
+        "employmentType": job_context.get("employmentType"),
+        "seniorityHint": job_context.get("seniorityHint"),
+        "remotePolicy": job_context.get("remotePolicy"),
+        "techStack": ensure_str_list(job_context.get("techStack")),
+        "source": job_context.get("source"),
+        "sourceUrl": job_context.get("sourceUrl"),
+    }
+
+    profile_payload = {
+        "objective": profile_context.get("objective"),
+        "seniority": profile_context.get("seniority"),
+        "targetRoles": ensure_str_list(profile_context.get("targetRoles")),
+        "preferredLocations": ensure_str_list(profile_context.get("preferredLocations")),
+        "preferredWorkModel": profile_context.get("preferredWorkModel"),
+        "salaryExpectation": profile_context.get("salaryExpectation"),
+        "mustHaveSkills": ensure_str_list(profile_context.get("mustHaveSkills")),
+        "niceToHaveSkills": ensure_str_list(profile_context.get("niceToHaveSkills")),
+    }
+
+    resume_payload = {
+        "summary": resume_context.get("summary"),
+        "seniority": resume_context.get("seniority"),
+        "skills": ensure_str_list(resume_context.get("skills")),
+        "languages": ensure_str_list(resume_context.get("languages")),
+        "experience": resume_context.get("experience") or [],
+        "education": resume_context.get("education") or [],
+        "parseStatus": resume_context.get("parseStatus"),
+        "parseConfidence": resume_context.get("parseConfidence"),
+    }
+
+    job_hash = _hash_payload(job_payload)
+    profile_version = _hash_payload(profile_payload)
+    resume_version = _hash_payload(resume_payload)
+    prompt_version = hashlib.sha256(str(scoring_prompt or "").encode("utf-8")).hexdigest()
+    model_version = str(model_name or "").strip().lower()
+
+    cache_key_payload = {
+        "jobHash": job_hash,
+        "profileVersion": profile_version,
+        "resumeVersion": resume_version,
+        "promptVersion": prompt_version,
+        "modelVersion": model_version,
+    }
+
+    return {
+        "jobHash": job_hash,
+        "profileVersion": profile_version,
+        "resumeVersion": resume_version,
+        "promptVersion": prompt_version,
+        "modelVersion": model_version,
+        "cacheKey": _hash_payload(cache_key_payload),
+    }
+
+
 def context_quality(job_context: dict, profile_context: dict, resume_context: dict) -> float:
     job_quality = (
         0.15 * bool((job_context.get("title") or "").strip())
