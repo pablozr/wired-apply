@@ -44,6 +44,7 @@ def _normalize_raw_job(raw_job: dict) -> dict:
     location = str(raw_job.get("location") or "").strip() or None
     source = str(raw_job.get("source") or "ingestion").strip().lower() or "ingestion"
     source_url = str(raw_job.get("source_url") or "").strip() or None
+    source_target = str(raw_job.get("source_target") or "").strip() or None
     external_job_id = str(raw_job.get("external_job_id") or "").strip().lower() or None
     description = str(raw_job.get("description") or "").strip() or None
     requirements = str(raw_job.get("requirements") or "").strip() or None
@@ -94,6 +95,7 @@ def _normalize_raw_job(raw_job: dict) -> dict:
         "ingestion_relevance_reason": ingestion_relevance_reason,
         "ingestion_exploration_kept": ingestion_exploration_kept,
         "source": source,
+        "source_target": source_target,
         "source_url": source_url,
         "external_job_id": external_job_id,
         "source_posted_at": _normalize_source_posted_at(
@@ -144,7 +146,11 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
 
         async with postgresql.pool.acquire() as conn:
             try:
-                await global_jobs_service.upsert_global_job(conn, normalized_job)
+                await global_jobs_service.upsert_global_job(
+                    conn,
+                    normalized_job,
+                    normalized_job.get("source_target"),
+                )
             except Exception as error:
                 logger.warning(
                     "normalize_worker_global_catalog_upsert_failed run_id=%s user_id=%s error=%s",

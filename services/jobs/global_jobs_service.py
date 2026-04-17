@@ -90,6 +90,9 @@ async def upsert_global_job(
         normalized_job["company"],
     )
     external_job_id = normalized_job["external_job_id"] or dedupe_key
+    source_target_value = _normalize_text(source_target)
+    if source_target_value is None:
+        source_target_value = _normalize_text(raw_job.get("source_target"))
 
     global_job_row = await conn.fetchrow(
         """
@@ -190,7 +193,7 @@ async def upsert_global_job(
         """,
         global_job_id,
         normalized_job["source"],
-        source_target,
+        source_target_value,
         normalized_job["source_url"],
         external_job_id,
         normalized_job["source_posted_at"],
