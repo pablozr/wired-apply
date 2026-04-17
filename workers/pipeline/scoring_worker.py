@@ -11,9 +11,12 @@ from core.config.config import (
     AI_MIN_CONTEXT_QUALITY,
     AI_SCORING_CACHE_ENABLED,
     AI_SCORING_ENABLED,
+    AI_SCORING_MAX_SENIORITY_GAP,
     AI_SCORING_MIN_DETERMINISTIC_SCORE,
+    AI_SCORING_MIN_LOCATION_SIGNAL,
     AI_SCORING_MIN_ROLE_MATCH,
     AI_SCORING_MIN_SKILL_OVERLAP,
+    AI_SCORING_MIN_WORK_MODEL_SIGNAL,
     DIGEST_EMAIL_QUEUE,
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
@@ -24,6 +27,8 @@ from core.config.config import (
     PIPELINE_RUN_AI_CALLS_KEY_PREFIX,
     PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
     PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
+    PIPELINE_RUN_AI_PREFILTER_REASON_KEY_PREFIX,
+    PIPELINE_RUN_AI_PREFILTER_REJECTED_KEY_PREFIX,
     PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
     SCORING_JOBS_QUEUE,
 )
@@ -38,11 +43,13 @@ from services.weights.weights_service import get_score_weights
 from services.messaging import messaging_service
 from services.rules import pipeline_state_machine, scoring_policy
 from services.rules.scoring_context_policy import (
+    AI_PREFILTER_REASON_CODES,
     build_ai_cache_versions,
     build_ai_context_hash,
     compose_final_score,
     compute_score,
     context_quality as compute_context_quality,
+    evaluate_ai_prefilter,
     reason_from_signals,
     signal_from_context,
 )
@@ -223,10 +230,28 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                 profile_context,
                 resume_context,
             )
-            role_match = float(signal_details.get("roleMatch") or 0.0)
-            skill_hits = int(signal_details.get("skillHits") or 0)
-            skill_total = int(signal_details.get("skillTotal") or 0)
-            skill_overlap = (skill_hits / skill_total) if skill_total > 0 else 0.0
+            prefilter_result = evaluate_ai_prefilter(
+                deterministic_score,
+                signal_details,
+                AI_SCORING_MIN_DETERMINISTIC_SCORE,
+                AI_SCORING_MIN_ROLE_MATCH,
+                AI_SCORING_MIN_SKILL_OVERLAP,
+                AI_SCORING_MIN_LOCATION_SIGNAL,
+                AI_SCORING_MIN_WORK_MODEL_SIGNAL,
+                AI_SCORING_MAX_SENIORITY_GAP,
+            )
+            prefilter_metrics = ensure_dict(prefilter_result.get("metrics"))
+            prefilter_reason = str(prefilter_result.get("reason") or "").strip() or None
+
+            role_match = float(prefilter_metrics.get("roleMatch") or 0.0)
+            skill_hits = int(prefilter_metrics.get("skillHits") or 0)
+            skill_total = int(prefilter_metrics.get("skillTotal") or 0)
+            skill_overlap = float(prefilter_metrics.get("skillOverlap") or 0.0)
+            location_signal = float(prefilter_metrics.get("locationSignal") or 0.0)
+            work_model_signal = float(prefilter_metrics.get("workModelSignal") or 0.0)
+            seniority_gap_raw = prefilter_metrics.get("seniorityGap")
+            seniority_gap = int(seniority_gap_raw) if seniority_gap_raw is not None else None
+
             ai_context_hash = build_ai_context_hash(
                 job_context,
                 profile_context,
@@ -292,12 +317,8 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                     ai_breakdown = ensure_dict(existing_score_row["ai_breakdown"])
                     ai_cache_hit = True
                     ai_skipped_reason = "cache_hit"
-                elif deterministic_score < float(AI_SCORING_MIN_DETERMINISTIC_SCORE):
-                    ai_skipped_reason = "below_deterministic_threshold"
-                elif role_match < float(AI_SCORING_MIN_ROLE_MATCH):
-                    ai_skipped_reason = "low_role_match"
-                elif skill_total > 0 and skill_overlap < float(AI_SCORING_MIN_SKILL_OVERLAP):
-                    ai_skipped_reason = "low_skill_overlap"
+                elif prefilter_reason:
+                    ai_skipped_reason = prefilter_reason
                 elif context_quality_score < float(AI_MIN_CONTEXT_QUALITY):
                     ai_skipped_reason = "low_context_quality"
                 else:
@@ -366,6 +387,18 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             if ai_skipped_reason and ai_skipped_reason != "cache_hit":
                 await _increment_run_metric(
                     PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
+                    str(run_id),
+                    user_id_int,
+                )
+
+            if ai_skipped_reason in AI_PREFILTER_REASON_CODES:
+                await _increment_run_metric(
+                    PIPELINE_RUN_AI_PREFILTER_REJECTED_KEY_PREFIX,
+                    str(run_id),
+                    user_id_int,
+                )
+                await _increment_run_metric(
+                    f"{PIPELINE_RUN_AI_PREFILTER_REASON_KEY_PREFIX}:{ai_skipped_reason}",
                     str(run_id),
                     user_id_int,
                 )
@@ -489,7 +522,7 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "scoring_worker_processed run_id=%s user_id=%s job_id=%s sequence=%s/%s date_from=%s date_to=%s days_range=%s force_rescore=%s final_score=%.2f deterministic_score=%.2f ai_score=%s ai_confidence=%s context_quality=%.2f role_match=%.2f skill_overlap=%.2f effective_ai_weight=%.4f ai_used=%s ai_cache_hit=%s ai_calls_count=%s ai_skipped_reason=%s ai_delta=%s bucket=%s",
+            "scoring_worker_processed run_id=%s user_id=%s job_id=%s sequence=%s/%s date_from=%s date_to=%s days_range=%s force_rescore=%s final_score=%.2f deterministic_score=%.2f ai_score=%s ai_confidence=%s context_quality=%.2f role_match=%.2f skill_overlap=%.2f location_signal=%.2f work_model_signal=%.2f seniority_gap=%s prefilter_reason=%s effective_ai_weight=%.4f ai_used=%s ai_cache_hit=%s ai_calls_count=%s ai_skipped_reason=%s ai_delta=%s bucket=%s",
             run_id,
             user_id_int,
             job_id_int,
@@ -506,6 +539,10 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
             context_quality_rounded,
             round(role_match, 2),
             round(skill_overlap, 2),
+            round(location_signal, 2),
+            round(work_model_signal, 2),
+            seniority_gap,
+            prefilter_reason,
             effective_ai_weight,
             ai_used,
             ai_cache_hit,

@@ -15,6 +15,8 @@ from core.config.config import (
     PIPELINE_RUN_AI_CALLS_KEY_PREFIX,
     PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
     PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
+    PIPELINE_RUN_AI_PREFILTER_REASON_KEY_PREFIX,
+    PIPELINE_RUN_AI_PREFILTER_REJECTED_KEY_PREFIX,
     PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
     PIPELINE_SCORING_PROGRESS_KEY_PREFIX,
     PIPELINE_SCORING_FAILED_KEY_PREFIX,
@@ -26,6 +28,7 @@ from core.redis.redis import redis_cache
 from schemas.digest import digest_from_row
 from services.cache import cache_service
 from services.messaging import messaging_service
+from services.rules.scoring_context_policy import AI_PREFILTER_REASON_CODES
 
 
 def _event_dedupe_key(event_id: str) -> str:
@@ -56,14 +59,20 @@ async def _build_run_metrics(run_id: str, user_id: int) -> dict:
     if redis_client is None:
         return {}
 
-    metric_keys = (
+    base_metric_keys = (
         f"{PIPELINE_SCORING_PROGRESS_KEY_PREFIX}:{run_id}",
         f"{PIPELINE_SCORING_FAILED_KEY_PREFIX}:{run_id}",
         f"{PIPELINE_RUN_AI_CALLS_KEY_PREFIX}:{run_id}:{user_id}",
         f"{PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX}:{run_id}:{user_id}",
         f"{PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX}:{run_id}:{user_id}",
         f"{PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX}:{run_id}:{user_id}",
+        f"{PIPELINE_RUN_AI_PREFILTER_REJECTED_KEY_PREFIX}:{run_id}:{user_id}",
     )
+    prefilter_reason_keys = tuple(
+        f"{PIPELINE_RUN_AI_PREFILTER_REASON_KEY_PREFIX}:{reason}:{run_id}:{user_id}"
+        for reason in AI_PREFILTER_REASON_CODES
+    )
+    metric_keys = base_metric_keys + prefilter_reason_keys
 
     try:
         values = await redis_client.mget(*metric_keys)
@@ -83,6 +92,14 @@ async def _build_run_metrics(run_id: str, user_id: int) -> dict:
     ai_cache_hits = _safe_int(values[3])
     ai_cache_misses = _safe_int(values[4])
     ai_skipped = _safe_int(values[5])
+    ai_prefilter_rejected = _safe_int(values[6])
+
+    reason_values = values[7:]
+    ai_prefilter_reasons = {
+        reason: _safe_int(reason_value)
+        for reason, reason_value in zip(AI_PREFILTER_REASON_CODES, reason_values)
+        if _safe_int(reason_value) > 0
+    }
 
     ai_cache_checks = ai_cache_hits + ai_cache_misses
 
@@ -97,6 +114,8 @@ async def _build_run_metrics(run_id: str, user_id: int) -> dict:
             round(ai_cache_hits / ai_cache_checks, 4) if ai_cache_checks > 0 else None
         ),
         "aiSkipped": ai_skipped,
+        "aiPrefilterRejected": ai_prefilter_rejected,
+        "aiPrefilterReasons": ai_prefilter_reasons,
     }
 
 

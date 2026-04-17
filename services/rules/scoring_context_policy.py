@@ -12,6 +12,16 @@ from core.utils.json_utils import ensure_str_list
 from services.rules import scoring_policy
 
 
+AI_PREFILTER_REASON_CODES = (
+    "below_deterministic_threshold",
+    "low_role_match",
+    "low_skill_overlap",
+    "low_work_model_signal",
+    "low_location_signal",
+    "high_seniority_gap",
+)
+
+
 def _normalize_text(value) -> str:
     return str(value or "").strip().lower()
 
@@ -153,19 +163,22 @@ def signal_from_context(
     is_job_remote = "remote" in location or "remote" in remote_policy
     is_job_hybrid = "hybrid" in location or "hybrid" in remote_policy
 
-    location_signal = 0.65
+    work_model_signal = 0.65
     if preferred_work_model:
         if "remote" in preferred_work_model:
-            location_signal = 1.0 if is_job_remote else 0.38
+            work_model_signal = 1.0 if is_job_remote else 0.38
         elif "hybrid" in preferred_work_model:
             if is_job_hybrid:
-                location_signal = 1.0
+                work_model_signal = 1.0
             elif is_job_remote:
-                location_signal = 0.78
+                work_model_signal = 0.78
             else:
-                location_signal = 0.52
+                work_model_signal = 0.52
         elif "onsite" in preferred_work_model or "on-site" in preferred_work_model:
-            location_signal = 0.95 if not (is_job_remote or is_job_hybrid) else 0.45
+            work_model_signal = 0.95 if not (is_job_remote or is_job_hybrid) else 0.45
+
+    location_signal = work_model_signal
+    location_match = False
 
     if preferred_locations:
         preferred_locations_normalized = [_normalize_text(item) for item in preferred_locations]
@@ -190,6 +203,14 @@ def signal_from_context(
         "skillTotal": len(candidate_skills),
         "jobSeniority": job_seniority,
         "candidateSeniority": candidate_seniority,
+        "seniorityGap": (
+            abs(int(job_seniority) - int(candidate_seniority))
+            if candidate_seniority and job_seniority
+            else None
+        ),
+        "workModelSignal": round(max(0.0, min(1.0, work_model_signal)), 2),
+        "locationSignal": round(max(0.0, min(1.0, location_signal)), 2),
+        "locationMatch": bool(location_match),
     }
 
     return signals, details
@@ -324,6 +345,56 @@ def build_ai_cache_versions(
         "promptVersion": prompt_version,
         "modelVersion": model_version,
         "cacheKey": _hash_payload(cache_key_payload),
+    }
+
+
+def evaluate_ai_prefilter(
+    deterministic_score: float,
+    signal_details: dict,
+    min_deterministic_score: float,
+    min_role_match: float,
+    min_skill_overlap: float,
+    min_location_signal: float,
+    min_work_model_signal: float,
+    max_seniority_gap: int,
+) -> dict:
+    role_match = float(signal_details.get("roleMatch") or 0.0)
+    skill_hits = int(signal_details.get("skillHits") or 0)
+    skill_total = int(signal_details.get("skillTotal") or 0)
+    skill_overlap = (skill_hits / skill_total) if skill_total > 0 else 0.0
+
+    location_signal = float(signal_details.get("locationSignal") or 0.0)
+    work_model_signal = float(signal_details.get("workModelSignal") or 0.0)
+
+    seniority_gap_value = signal_details.get("seniorityGap")
+    seniority_gap = int(seniority_gap_value) if seniority_gap_value is not None else None
+
+    reason = None
+    if float(deterministic_score) < float(min_deterministic_score):
+        reason = "below_deterministic_threshold"
+    elif role_match < float(min_role_match):
+        reason = "low_role_match"
+    elif skill_total > 0 and skill_overlap < float(min_skill_overlap):
+        reason = "low_skill_overlap"
+    elif work_model_signal < float(min_work_model_signal):
+        reason = "low_work_model_signal"
+    elif location_signal < float(min_location_signal):
+        reason = "low_location_signal"
+    elif seniority_gap is not None and seniority_gap > max(0, int(max_seniority_gap)):
+        reason = "high_seniority_gap"
+
+    return {
+        "allowAi": reason is None,
+        "reason": reason,
+        "metrics": {
+            "roleMatch": role_match,
+            "skillOverlap": skill_overlap,
+            "skillHits": skill_hits,
+            "skillTotal": skill_total,
+            "locationSignal": location_signal,
+            "workModelSignal": work_model_signal,
+            "seniorityGap": seniority_gap,
+        },
     }
 
 
