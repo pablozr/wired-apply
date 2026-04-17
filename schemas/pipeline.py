@@ -37,3 +37,7 @@ class PipelineStartRequest(BaseModel):
         current_date = date.today()
         date_from = current_date - timedelta(days=max(1, int(self.days_range)) - 1)
         return date_from, current_date
+
+
+class GlobalIngestionStartRequest(BaseModel):
+    force: bool = False

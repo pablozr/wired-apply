@@ -106,6 +106,12 @@ services:
     profiles: ["workers"]
     command: python -m workers.pipeline.ingestion_worker
 
+  global-ingestion-worker:
+    <<: *app-service
+    container_name: wiredapply-global-ingestion-worker
+    profiles: ["workers"]
+    command: python -m workers.pipeline.global_ingestion_worker
+
   normalize-worker:
     <<: *app-service
     container_name: wiredapply-normalize-worker
