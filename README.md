@@ -101,7 +101,7 @@ python -m workers.smtp.email_worker
 |---|---|---|
 | Auth | `/auth/*` | sessao, login e reset |
 | Users | `/users/*` | perfil e conta |
-| Pipeline | `/pipeline/*` | trigger e status do fluxo |
+| Pipeline | `/pipeline/*` | trigger, status e operacoes admin do fluxo |
 | Jobs | `/jobs/*` | CRUD de vagas |
 | Applications | `/applications/*` | ciclo de candidatura |
 | Feedback | `/feedback/*` | sinal para aprendizado |
@@ -130,6 +130,23 @@ Pipeline status (MVP target):
   <img src="https://img.shields.io/badge/scoring.jobs-ranking%20stage-1F2937?style=flat-square" alt="scoring badge" />
   <img src="https://img.shields.io/badge/digest.email-notify%20stage-1F2937?style=flat-square" alt="digest badge" />
 </p>
+
+
+Operacao admin da pipeline (MVP):
+
+| Endpoint | Metodo | Papel |
+|---|---|---|
+| `/pipeline/run` | `POST` | inicia pipeline por usuario com janela (`daysRange` ou `dateFrom/dateTo`) |
+| `/pipeline/status` | `GET` | retorna `isRunning`, `activeRunId`, `activeRunMetrics` e `lastRun` |
+| `/pipeline/global/run` | `POST` | enfileira ingestao global compartilhada (admin) |
+| `/pipeline/global/status` | `GET` | status da ingestao global (`lastRun` + lock ativo) |
+| `/pipeline/global/catalog-cleanup/run` | `POST` | dispara limpeza manual do catalogo global (admin) |
+| `/pipeline/global/catalog-cleanup/status` | `GET` | status da limpeza (`lastRun`, `deletedJobs`, lock ativo) |
+
+Metricas de execucao em `/pipeline/status`:
+
+- `activeRunMetrics.aiCacheHitRate` mostra a taxa atual de reaproveitamento de cache de IA.
+- `activeRunMetrics.aiPrefilterRejected` e `activeRunMetrics.aiPrefilterReasons` mostram os cortes deterministicos antes da IA.
 
 ### Snapshot de terminal
 
@@ -236,7 +253,7 @@ python -m workers.smtp.email_worker
 |---|---|---|
 | Auth | `/auth/*` | session, login, reset |
 | Users | `/users/*` | account and profile |
-| Pipeline | `/pipeline/*` | trigger and status |
+| Pipeline | `/pipeline/*` | trigger, status, and admin pipeline operations |
 | Jobs | `/jobs/*` | jobs CRUD |
 | Applications | `/applications/*` | application lifecycle |
 | Feedback | `/feedback/*` | learning signal |
@@ -247,6 +264,23 @@ python -m workers.smtp.email_worker
 <p align="center">
   <img src="assets/pipeline-workers.svg" alt="Workers pipeline" width="1000" />
 </p>
+
+
+Pipeline admin operations (MVP):
+
+| Endpoint | Method | Role |
+|---|---|---|
+| `/pipeline/run` | `POST` | starts user pipeline with a date window (`daysRange` or `dateFrom/dateTo`) |
+| `/pipeline/status` | `GET` | returns `isRunning`, `activeRunId`, `activeRunMetrics`, and `lastRun` |
+| `/pipeline/global/run` | `POST` | queues shared global ingestion (admin) |
+| `/pipeline/global/status` | `GET` | global ingestion status (`lastRun` + active lock) |
+| `/pipeline/global/catalog-cleanup/run` | `POST` | triggers manual global-catalog cleanup (admin) |
+| `/pipeline/global/catalog-cleanup/status` | `GET` | cleanup status (`lastRun`, `deletedJobs`, active lock) |
+
+Run metrics in `/pipeline/status`:
+
+- `activeRunMetrics.aiCacheHitRate` shows current AI cache reuse rate.
+- `activeRunMetrics.aiPrefilterRejected` and `activeRunMetrics.aiPrefilterReasons` show deterministic cuts before AI calls.
 
 ### Runtime snapshot
 
