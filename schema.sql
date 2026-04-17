@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     source          VARCHAR(50)  NOT NULL DEFAULT 'manual',
     source_url      TEXT,
     external_job_id VARCHAR(255),
+    source_posted_at TIMESTAMP,
+    first_seen_at   TIMESTAMP    NOT NULL DEFAULT NOW(),
+    last_seen_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
     status          VARCHAR(30)  NOT NULL DEFAULT 'NEW',
     created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP    NOT NULL DEFAULT NOW()
@@ -76,6 +79,56 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_user_source_external_job_idx
     ON jobs (user_id, source, external_job_id)
     WHERE external_job_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS jobs_user_effective_date_idx
+    ON jobs (user_id, COALESCE(source_posted_at, first_seen_at) DESC, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS global_jobs (
+    id              SERIAL PRIMARY KEY,
+    dedupe_key      VARCHAR(255) NOT NULL UNIQUE,
+    title           VARCHAR(255) NOT NULL,
+    company         VARCHAR(255) NOT NULL,
+    location        VARCHAR(255),
+    description     TEXT,
+    requirements    TEXT,
+    employment_type VARCHAR(80),
+    seniority_hint  VARCHAR(50),
+    remote_policy   VARCHAR(50),
+    tech_stack      JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    source_posted_at TIMESTAMP,
+    first_seen_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    last_seen_at     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS global_jobs_effective_date_idx
+    ON global_jobs (COALESCE(source_posted_at, first_seen_at) DESC, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS global_jobs_last_seen_idx
+    ON global_jobs (last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS global_job_sources (
+    id               SERIAL PRIMARY KEY,
+    global_job_id    INTEGER      NOT NULL REFERENCES global_jobs(id) ON DELETE CASCADE,
+    source           VARCHAR(50)  NOT NULL,
+    source_target    VARCHAR(255),
+    source_url       TEXT,
+    external_job_id  VARCHAR(255) NOT NULL,
+    source_posted_at TIMESTAMP,
+    first_seen_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    last_seen_at     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    raw_payload      JSONB        NOT NULL DEFAULT '{}'::jsonb,
+    created_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    UNIQUE (source, external_job_id)
+);
+
+CREATE INDEX IF NOT EXISTS global_job_sources_job_last_seen_idx
+    ON global_job_sources (global_job_id, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS global_job_sources_source_last_seen_idx
+    ON global_job_sources (source, last_seen_at DESC);
 
 CREATE TABLE IF NOT EXISTS job_scores (
     id                  SERIAL PRIMARY KEY,
@@ -170,7 +223,13 @@ ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS tech_stack JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS ingestion_relevance_score NUMERIC(5,2),
     ADD COLUMN IF NOT EXISTS ingestion_relevance_reason TEXT,
-    ADD COLUMN IF NOT EXISTS ingestion_exploration_kept BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS ingestion_exploration_kept BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS source_posted_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+ALTER TABLE IF EXISTS global_jobs
+    ALTER COLUMN dedupe_key TYPE VARCHAR(255);
 
 UPDATE job_scores
 SET
@@ -181,3 +240,11 @@ WHERE
     deterministic_score IS NULL
     OR final_score IS NULL
     OR score IS NULL;
+
+UPDATE jobs
+SET
+    first_seen_at = COALESCE(first_seen_at, created_at, NOW()),
+    last_seen_at = COALESCE(last_seen_at, updated_at, first_seen_at, NOW())
+WHERE
+    first_seen_at IS NULL
+    OR last_seen_at IS NULL;
