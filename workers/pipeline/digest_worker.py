@@ -12,6 +12,12 @@ from core.config.config import (
     PIPELINE_LAST_RUN_KEY_PREFIX,
     PIPELINE_LAST_RUN_TTL_SECONDS,
     PIPELINE_RUN_LOCK_KEY_PREFIX,
+    PIPELINE_RUN_AI_CALLS_KEY_PREFIX,
+    PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
+    PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
+    PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
+    PIPELINE_SCORING_PROGRESS_KEY_PREFIX,
+    PIPELINE_SCORING_FAILED_KEY_PREFIX,
 )
 from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
@@ -43,6 +49,55 @@ def _safe_date_from_payload(raw_value) -> date:
     if isinstance(raw_value, date):
         return raw_value
     return date.today()
+
+
+async def _build_run_metrics(run_id: str, user_id: int) -> dict:
+    redis_client = redis_cache.redis
+    if redis_client is None:
+        return {}
+
+    metric_keys = (
+        f"{PIPELINE_SCORING_PROGRESS_KEY_PREFIX}:{run_id}",
+        f"{PIPELINE_SCORING_FAILED_KEY_PREFIX}:{run_id}",
+        f"{PIPELINE_RUN_AI_CALLS_KEY_PREFIX}:{run_id}:{user_id}",
+        f"{PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX}:{run_id}:{user_id}",
+        f"{PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX}:{run_id}:{user_id}",
+        f"{PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX}:{run_id}:{user_id}",
+    )
+
+    try:
+        values = await redis_client.mget(*metric_keys)
+    except Exception as e:
+        logger.exception(e)
+        return {}
+
+    def _safe_int(raw_value) -> int:
+        try:
+            return int(raw_value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    processed_count = _safe_int(values[0])
+    failed_count = _safe_int(values[1])
+    ai_calls = _safe_int(values[2])
+    ai_cache_hits = _safe_int(values[3])
+    ai_cache_misses = _safe_int(values[4])
+    ai_skipped = _safe_int(values[5])
+
+    ai_cache_checks = ai_cache_hits + ai_cache_misses
+
+    return {
+        "jobsProcessed": processed_count,
+        "jobsFailed": failed_count,
+        "jobsFinished": processed_count + failed_count,
+        "aiCalls": ai_calls,
+        "aiCacheHits": ai_cache_hits,
+        "aiCacheMisses": ai_cache_misses,
+        "aiCacheHitRate": (
+            round(ai_cache_hits / ai_cache_checks, 4) if ai_cache_checks > 0 else None
+        ),
+        "aiSkipped": ai_skipped,
+    }
 
 
 async def _build_or_update_digest(conn, user_id: int, digest_date: date):
@@ -235,11 +290,14 @@ async def process_digest_event(message: AbstractIncomingMessage) -> None:
             last_run_key = _pipeline_last_run_key(int(user_id))
             last_run = await cache_service.get_by_key(last_run_key, redis_cache.redis)
             last_run_data = last_run if isinstance(last_run, dict) else {}
+            run_metrics = await _build_run_metrics(str(run_id), int(user_id))
+
             last_run_data.update(
                 {
                     "runId": str(run_id),
                     "status": "COMPLETED",
                     "completedAt": datetime.now(timezone.utc).isoformat(),
+                    "metrics": run_metrics,
                 }
             )
             await cache_service.set_by_key(

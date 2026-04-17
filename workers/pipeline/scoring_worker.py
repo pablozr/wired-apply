@@ -22,6 +22,9 @@ from core.config.config import (
     PIPELINE_SCORING_DIGEST_TRIGGER_KEY_PREFIX,
     PIPELINE_SCORING_PROGRESS_KEY_PREFIX,
     PIPELINE_RUN_AI_CALLS_KEY_PREFIX,
+    PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
+    PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
+    PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
     SCORING_JOBS_QUEUE,
 )
 from core.logger.logger import logger
@@ -98,6 +101,20 @@ async def _should_publish_digest(
     except Exception as e:
         logger.exception(e)
         return False
+
+
+async def _increment_run_metric(key_prefix: str, run_id: str, user_id: int) -> None:
+    redis_client = redis_cache.redis
+    if redis_client is None:
+        return
+
+    try:
+        metric_key = f"{key_prefix}:{run_id}:{user_id}"
+        metric_count = int(await redis_client.incr(metric_key))
+        if metric_count == 1:
+            await redis_client.expire(metric_key, PIPELINE_LAST_RUN_TTL_SECONDS)
+    except Exception as e:
+        logger.exception(e)
 
 
 async def process_scoring_event(message: AbstractIncomingMessage) -> None:
@@ -331,6 +348,27 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
                             ai_skipped_reason = "ai_scoring_failed"
             else:
                 ai_skipped_reason = "ai_disabled"
+
+            if AI_SCORING_ENABLED and AI_SCORING_CACHE_ENABLED and not force_rescore:
+                if ai_cache_hit:
+                    await _increment_run_metric(
+                        PIPELINE_RUN_AI_CACHE_HITS_KEY_PREFIX,
+                        str(run_id),
+                        user_id_int,
+                    )
+                else:
+                    await _increment_run_metric(
+                        PIPELINE_RUN_AI_CACHE_MISSES_KEY_PREFIX,
+                        str(run_id),
+                        user_id_int,
+                    )
+
+            if ai_skipped_reason and ai_skipped_reason != "cache_hit":
+                await _increment_run_metric(
+                    PIPELINE_RUN_AI_SKIPPED_KEY_PREFIX,
+                    str(run_id),
+                    user_id_int,
+                )
 
             final_score, effective_ai_weight, ai_used = compose_final_score(
                 deterministic_score,
