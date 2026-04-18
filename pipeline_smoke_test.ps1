@@ -334,6 +334,22 @@ function Test-UserPipelineFlow {
     if (-not $completed) {
         Add-Warning "Pipeline run did not reach COMPLETED within timeout; workers may be down or queue is backlogged"
     }
+
+    if ($completed) {
+        $safeRankingDays = [Math]::Max(1, [Math]::Min(30, $PipelineDaysRange))
+        $rankingPath = "/jobs/ranking/daily?daysRange=$safeRankingDays&limit=10"
+        $rankingResponse = Invoke-ApiRequest -Method "GET" -Path $rankingPath -AuthCookieToken $AuthToken
+
+        if (-not $rankingResponse.Ok) {
+            Add-Warning "GET $rankingPath failed (HTTP $($rankingResponse.StatusCode)): $(Get-ResponseMessage $rankingResponse)"
+        }
+        else {
+            $rankingItems = $rankingResponse.Json.data.ranking
+            $rankingCount = if ($rankingItems) { [int]$rankingItems.Count } else { 0 }
+            $window = $rankingResponse.Json.data.window
+            Add-Ok "Ranking window read (items=$rankingCount dateFrom=$($window.dateFrom) dateTo=$($window.dateTo))"
+        }
+    }
 }
 
 function Test-AdminPipelineFlow {
