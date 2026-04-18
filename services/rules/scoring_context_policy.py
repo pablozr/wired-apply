@@ -10,6 +10,13 @@ from core.config.config import (
 )
 from core.utils.json_utils import ensure_str_list
 from services.rules import scoring_policy
+from services.rules.text_normalization import (
+    ABOVE_LEVEL_TITLE_TOKENS,
+    HARD_ABOVE_LEVEL_TITLE_TOKENS,
+    infer_seniority_level,
+    location_signals,
+    tokenize_text,
+)
 
 
 AI_PREFILTER_REASON_CODES = (
@@ -19,50 +26,8 @@ AI_PREFILTER_REASON_CODES = (
     "low_work_model_signal",
     "low_location_signal",
     "high_seniority_gap",
+    "title_above_candidate_level",
 )
-
-
-def _normalize_text(value) -> str:
-    return str(value or "").strip().lower()
-
-
-def _tokenize_text(*values) -> set[str]:
-    tokens: set[str] = set()
-
-    for value in values:
-        text = _normalize_text(value)
-        if not text:
-            continue
-
-        cleaned = "".join(
-            character if character.isalnum() or character in {"+", "#", "."} else " "
-            for character in text
-        )
-
-        for token in cleaned.split():
-            if len(token) >= 2:
-                tokens.add(token)
-
-    return tokens
-
-
-def _infer_seniority_level(*values) -> int | None:
-    text = " ".join(_normalize_text(value) for value in values if value)
-    if not text:
-        return None
-
-    if any(token in text for token in ["staff", "principal", "architect"]):
-        return 4
-    if any(token in text for token in ["lead", "manager", "head"]):
-        return 4
-    if any(token in text for token in ["senior", " sr ", " sr."]):
-        return 3
-    if any(token in text for token in ["mid", "middle", "pleno"]):
-        return 2
-    if any(token in text for token in ["junior", "entry", "intern", "trainee"]):
-        return 1
-
-    return None
 
 
 def signal_from_context(
@@ -73,22 +38,24 @@ def signal_from_context(
     title = job_context.get("title") or ""
     description = job_context.get("description") or ""
     requirements = job_context.get("requirements") or ""
-    location = _normalize_text(job_context.get("location"))
-    remote_policy = _normalize_text(job_context.get("remotePolicy"))
+    location = job_context.get("location") or ""
+    remote_policy = job_context.get("remotePolicy") or ""
     tech_stack = ensure_str_list(job_context.get("techStack"))
 
-    title_tokens = _tokenize_text(title)
-    job_tokens = _tokenize_text(title, description, requirements, " ".join(tech_stack), location)
+    title_tokens = tokenize_text(title)
+    job_tokens = tokenize_text(title, description, requirements, " ".join(tech_stack), location)
 
     target_roles = ensure_str_list(profile_context.get("targetRoles"))
     must_have_skills = ensure_str_list(profile_context.get("mustHaveSkills"))
     nice_to_have_skills = ensure_str_list(profile_context.get("niceToHaveSkills"))
     resume_skills = ensure_str_list(resume_context.get("skills"))
+    preferred_locations = ensure_str_list(profile_context.get("preferredLocations"))
+    preferred_work_model = profile_context.get("preferredWorkModel") or ""
 
     role_match = 0.0
     if target_roles:
         for role in target_roles:
-            role_tokens = _tokenize_text(role)
+            role_tokens = tokenize_text(role)
             if not role_tokens:
                 continue
 
@@ -99,10 +66,32 @@ def signal_from_context(
             1.0 if any(token in title_tokens for token in {"engineer", "developer", "backend"}) else 0.55
         )
 
+    candidate_seniority = infer_seniority_level(
+        profile_context.get("seniority"),
+        resume_context.get("seniority"),
+        profile_context.get("objective"),
+    )
+    job_seniority = infer_seniority_level(
+        job_context.get("seniorityHint"),
+        title,
+        description,
+        requirements,
+    )
+
+    title_above_marker = bool(title_tokens & ABOVE_LEVEL_TITLE_TOKENS)
+    title_hard_above_marker = bool(title_tokens & HARD_ABOVE_LEVEL_TITLE_TOKENS)
+
+    if (
+        candidate_seniority
+        and candidate_seniority <= 2
+        and title_above_marker
+    ):
+        role_match *= 0.40
+
     candidate_skills = (must_have_skills or resume_skills)[:20]
     skill_hits = 0
     for skill in candidate_skills:
-        skill_tokens = _tokenize_text(skill)
+        skill_tokens = tokenize_text(skill)
         if not skill_tokens:
             continue
 
@@ -113,39 +102,30 @@ def signal_from_context(
         (skill_hits / len(candidate_skills)) if candidate_skills else 0.55
     )
 
+    nice_total = len(nice_to_have_skills[:20]) if nice_to_have_skills else 0
     nice_hits = 0
     for skill in nice_to_have_skills[:20]:
-        skill_tokens = _tokenize_text(skill)
+        skill_tokens = tokenize_text(skill)
         if skill_tokens & job_tokens:
             nice_hits += 1
 
-    nice_overlap = (
-        (nice_hits / len(nice_to_have_skills[:20])) if nice_to_have_skills else 0.5
-    )
+    nice_overlap = (nice_hits / nice_total) if nice_total else 0.5
 
-    role_signal = max(0.35, min(1.0, 0.45 * role_match + 0.45 * skill_overlap + 0.10 * nice_overlap))
+    role_signal = max(0.30, min(1.0, 0.50 * role_match + 0.40 * skill_overlap + 0.10 * nice_overlap))
 
-    candidate_seniority = _infer_seniority_level(
-        profile_context.get("seniority"),
-        resume_context.get("seniority"),
-        profile_context.get("objective"),
-    )
-    job_seniority = _infer_seniority_level(
-        job_context.get("seniorityHint"),
-        title,
-        description,
-        requirements,
-    )
-
+    seniority_gap = None
     if candidate_seniority and job_seniority:
         seniority_gap = abs(job_seniority - candidate_seniority)
-        seniority_signal = 1.0 if seniority_gap == 0 else 0.74 if seniority_gap == 1 else 0.45
-        if job_seniority < candidate_seniority:
-            seniority_signal = max(0.35, seniority_signal - 0.08)
+        if seniority_gap == 0:
+            seniority_signal = 1.0
+        elif seniority_gap == 1:
+            seniority_signal = 0.70 if job_seniority > candidate_seniority else 0.55
+        else:
+            seniority_signal = 0.20
     elif candidate_seniority or job_seniority:
-        seniority_signal = 0.68
+        seniority_signal = 0.55
     else:
-        seniority_signal = 0.75
+        seniority_signal = 0.65
 
     has_salary_expectation = bool((profile_context.get("salaryExpectation") or "").strip())
     if has_salary_expectation and candidate_seniority and job_seniority:
@@ -158,37 +138,12 @@ def signal_from_context(
     else:
         salary_signal = max(0.55, min(0.92, 0.60 + 0.40 * skill_overlap))
 
-    preferred_work_model = _normalize_text(profile_context.get("preferredWorkModel"))
-    preferred_locations = ensure_str_list(profile_context.get("preferredLocations"))
-    is_job_remote = "remote" in location or "remote" in remote_policy
-    is_job_hybrid = "hybrid" in location or "hybrid" in remote_policy
-
-    work_model_signal = 0.65
-    if preferred_work_model:
-        if "remote" in preferred_work_model:
-            work_model_signal = 1.0 if is_job_remote else 0.38
-        elif "hybrid" in preferred_work_model:
-            if is_job_hybrid:
-                work_model_signal = 1.0
-            elif is_job_remote:
-                work_model_signal = 0.78
-            else:
-                work_model_signal = 0.52
-        elif "onsite" in preferred_work_model or "on-site" in preferred_work_model:
-            work_model_signal = 0.95 if not (is_job_remote or is_job_hybrid) else 0.45
-
-    location_signal = work_model_signal
-    location_match = False
-
-    if preferred_locations:
-        preferred_locations_normalized = [_normalize_text(item) for item in preferred_locations]
-        location_match = any(item and item in location for item in preferred_locations_normalized)
-        accepts_remote = any("remote" in item for item in preferred_locations_normalized)
-
-        if location_match or (accepts_remote and is_job_remote):
-            location_signal = min(1.0, location_signal + 0.20)
-        elif not is_job_remote:
-            location_signal = min(location_signal, 0.50)
+    loc = location_signals(location, remote_policy, preferred_locations, preferred_work_model)
+    work_model_signal = loc["workModelSignal"]
+    location_signal = loc["locationSignal"]
+    location_match = loc["locationMatch"]
+    is_remote = loc["isRemote"]
+    accepts_remote = loc["acceptsRemote"]
 
     signals = {
         "role_weight": round(max(0.0, min(1.0, role_signal)), 4),
@@ -203,14 +158,14 @@ def signal_from_context(
         "skillTotal": len(candidate_skills),
         "jobSeniority": job_seniority,
         "candidateSeniority": candidate_seniority,
-        "seniorityGap": (
-            abs(int(job_seniority) - int(candidate_seniority))
-            if candidate_seniority and job_seniority
-            else None
-        ),
+        "seniorityGap": seniority_gap,
         "workModelSignal": round(max(0.0, min(1.0, work_model_signal)), 2),
         "locationSignal": round(max(0.0, min(1.0, location_signal)), 2),
         "locationMatch": bool(location_match),
+        "isRemote": bool(is_remote),
+        "acceptsRemote": bool(accepts_remote),
+        "titleAboveMarker": bool(title_above_marker),
+        "titleHardAboveMarker": bool(title_hard_above_marker),
     }
 
     return signals, details
@@ -226,6 +181,8 @@ def reason_from_signals(signals: dict[str, float], details: dict) -> str:
         f" | role_match:{float(details.get('roleMatch') or 0):.2f}"
         f" skills:{int(details.get('skillHits') or 0)}/{int(details.get('skillTotal') or 0)}"
         f" seniority:{details.get('candidateSeniority')}->{details.get('jobSeniority')}"
+        f" location_match:{int(bool(details.get('locationMatch')))}"
+        f" remote:{int(bool(details.get('isRemote')))}"
     )
 
 
@@ -369,6 +326,9 @@ def evaluate_ai_prefilter(
     seniority_gap_value = signal_details.get("seniorityGap")
     seniority_gap = int(seniority_gap_value) if seniority_gap_value is not None else None
 
+    candidate_seniority = signal_details.get("candidateSeniority")
+    title_hard_above = bool(signal_details.get("titleHardAboveMarker"))
+
     reason = None
     if float(deterministic_score) < float(min_deterministic_score):
         reason = "below_deterministic_threshold"
@@ -382,6 +342,12 @@ def evaluate_ai_prefilter(
         reason = "low_location_signal"
     elif seniority_gap is not None and seniority_gap > max(0, int(max_seniority_gap)):
         reason = "high_seniority_gap"
+    elif (
+        candidate_seniority
+        and int(candidate_seniority) <= 2
+        and title_hard_above
+    ):
+        reason = "title_above_candidate_level"
 
     return {
         "allowAi": reason is None,

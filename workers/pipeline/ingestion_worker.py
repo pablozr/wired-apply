@@ -16,7 +16,6 @@ from core.config.config import (
     PIPELINE_EVENT_DEDUPE_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
 )
-from core.http.http_client import http_client
 from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
@@ -27,6 +26,7 @@ from services.integrations import ats_service
 from services.jobs import global_catalog_service
 from services.messaging import messaging_service
 from services.rules import ingestion_relevance_policy
+from workers.common import managed_worker_resources
 
 
 async def _get_candidate_context(user_id: int) -> dict:
@@ -204,6 +204,7 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
 
         filtered_jobs: list[dict] = []
         rejected_jobs: list[tuple[float, dict, dict]] = []
+        hard_rejected_count = 0
         filter_enabled = bool(INGESTION_RELEVANCE_ENABLED)
 
         for raw_job in raw_jobs:
@@ -227,13 +228,22 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
                 filtered_jobs.append(enriched_job)
                 continue
 
+            if relevance.get("hardRejected"):
+                hard_rejected_count += 1
+                continue
+
             if relevance["keep"]:
                 filtered_jobs.append(enriched_job)
             else:
                 rejected_jobs.append((relevance["scoreRatio"], enriched_job, relevance))
 
-        minimum_jobs = max(1, int(INGESTION_RELEVANCE_MIN_JOBS))
-        if filter_enabled and candidate_has_signals and len(filtered_jobs) < minimum_jobs:
+        minimum_jobs = max(0, int(INGESTION_RELEVANCE_MIN_JOBS))
+        if (
+            filter_enabled
+            and candidate_has_signals
+            and minimum_jobs > 0
+            and len(filtered_jobs) < minimum_jobs
+        ):
             rejected_jobs.sort(key=lambda item: item[0], reverse=True)
             needed = minimum_jobs - len(filtered_jobs)
             for _, rejected_job, rejected_meta in rejected_jobs[:needed]:
@@ -278,12 +288,13 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s filter_enabled=%s candidate_signals=%s sources=%s origin=%s fallback=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
+            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s hard_rejected=%s filter_enabled=%s candidate_signals=%s sources=%s origin=%s fallback=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
             run_id,
             user_id,
             total_jobs,
             len(jobs),
             max(0, len(jobs) - total_jobs),
+            hard_rejected_count,
             filter_enabled,
             candidate_has_signals,
             source_count,
@@ -297,25 +308,20 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
 
 
 async def run() -> None:
-    await postgresql.connect()
-    await redis_cache.connect()
-    await rabbitmq.connect()
-    await http_client.connect()
+    async with managed_worker_resources(
+        use_postgresql=True,
+        use_redis=True,
+        use_rabbitmq=True,
+        use_http_client=True,
+    ):
+        assert rabbitmq.channel is not None
 
-    assert rabbitmq.channel is not None
+        await rabbitmq.channel.set_qos(prefetch_count=1)
+        queue = await rabbitmq.channel.declare_queue(INGESTION_JOBS_QUEUE, durable=True)
+        await rabbitmq.channel.declare_queue(JOBS_NORMALIZED_QUEUE, durable=True)
+        await queue.consume(process_ingestion_event)
 
-    await rabbitmq.channel.set_qos(prefetch_count=1)
-    queue = await rabbitmq.channel.declare_queue(INGESTION_JOBS_QUEUE, durable=True)
-    await rabbitmq.channel.declare_queue(JOBS_NORMALIZED_QUEUE, durable=True)
-    await queue.consume(process_ingestion_event)
-
-    try:
         await asyncio.Future()
-    finally:
-        await http_client.disconnect()
-        await rabbitmq.disconnect()
-        await redis_cache.disconnect()
-        await postgresql.disconnect()
 
 
 if __name__ == "__main__":
