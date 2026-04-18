@@ -36,6 +36,13 @@ async def get_one_user(conn: asyncpg.Connection, user_id: int) -> dict:
 
 async def create(conn: asyncpg.Connection, data: UserCreateRequest) -> dict:
     try:
+        already_exists = await conn.fetchval(
+            "SELECT 1 FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+            data.email,
+        )
+        if already_exists:
+            return {"status": False, "message": "Email already registered", "data": {}}
+
         hashed = hash_password(data.password)
 
         row = await conn.fetchrow(
