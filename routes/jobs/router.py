@@ -1,3 +1,5 @@
+from datetime import date
+
 import asyncpg
 from fastapi import APIRouter, Depends, Query
 
@@ -41,12 +43,15 @@ async def create_job(
 async def get_daily_ranking(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    days_range: int = Query(default=7, ge=1, le=30, alias="daysRange"),
+    date_from: date | None = Query(default=None, alias="dateFrom"),
+    date_to: date | None = Query(default=None, alias="dateTo"),
     user: dict = Depends(security.validate_token_wrapper),
     conn: asyncpg.Connection = Depends(postgresql.get_db),
 ):
     return await default_response(
         ranking_service.get_daily_ranking,
-        [conn, user["userId"], limit, offset],
+        [conn, user["userId"], limit, offset, days_range, date_from, date_to],
     )
 
 

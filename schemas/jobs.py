@@ -174,15 +174,33 @@ class JobData(TypedDict):
     source: str
     sourceUrl: str | None
     externalJobId: str | None
+    sourcePostedAt: str | None
+    firstSeenAt: str | None
+    lastSeenAt: str | None
+    effectiveDate: str | None
     status: str
     createdAt: str
     updatedAt: str
+
+
+def _to_iso(value) -> str | None:
+    if value is None:
+        return None
+
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+
+    return str(value)
 
 
 def job_from_row(row: asyncpg.Record) -> JobData:
     tech_stack = ensure_str_list(row["tech_stack"])
 
     ingestion_relevance_score = row["ingestion_relevance_score"]
+    source_posted_at = row["source_posted_at"]
+    first_seen_at = row["first_seen_at"]
+    last_seen_at = row["last_seen_at"]
+    effective_date = source_posted_at or first_seen_at
 
     return {
         "jobId": row["id"],
@@ -206,6 +224,10 @@ def job_from_row(row: asyncpg.Record) -> JobData:
         "source": row["source"],
         "sourceUrl": row["source_url"],
         "externalJobId": row["external_job_id"],
+        "sourcePostedAt": _to_iso(source_posted_at),
+        "firstSeenAt": _to_iso(first_seen_at),
+        "lastSeenAt": _to_iso(last_seen_at),
+        "effectiveDate": _to_iso(effective_date),
         "status": row["status"],
         "createdAt": str(row["created_at"]),
         "updatedAt": str(row["updated_at"]),

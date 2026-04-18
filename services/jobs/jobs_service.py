@@ -48,6 +48,9 @@ async def create_job(
                 source,
                 source_url,
                 external_job_id,
+                source_posted_at,
+                first_seen_at,
+                last_seen_at,
                 status,
                 created_at,
                 updated_at
@@ -111,12 +114,15 @@ async def list_jobs(
                 source,
                 source_url,
                 external_job_id,
+                source_posted_at,
+                first_seen_at,
+                last_seen_at,
                 status,
                 created_at,
                 updated_at
             FROM jobs
             WHERE user_id = $1
-            ORDER BY created_at DESC
+            ORDER BY COALESCE(source_posted_at, first_seen_at) DESC, created_at DESC
             LIMIT $2 OFFSET $3
             """,
             user_id,
@@ -165,6 +171,9 @@ async def get_one_job(conn: asyncpg.Connection, user_id: int, job_id: int) -> di
                 source,
                 source_url,
                 external_job_id,
+                source_posted_at,
+                first_seen_at,
+                last_seen_at,
                 status,
                 created_at,
                 updated_at
@@ -253,6 +262,9 @@ async def update_job(
                 source,
                 source_url,
                 external_job_id,
+                source_posted_at,
+                first_seen_at,
+                last_seen_at,
                 status,
                 created_at,
                 updated_at
