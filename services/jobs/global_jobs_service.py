@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import asyncpg
 
@@ -36,8 +36,14 @@ def _normalize_stack(value) -> list[str]:
 
 
 def _normalize_source_posted_at(value) -> datetime | None:
+    def _to_naive_utc(parsed_value: datetime) -> datetime:
+        if parsed_value.tzinfo is None:
+            return parsed_value
+
+        return parsed_value.astimezone(timezone.utc).replace(tzinfo=None)
+
     if isinstance(value, datetime):
-        return value
+        return _to_naive_utc(value)
 
     if not isinstance(value, str):
         return None
@@ -47,7 +53,8 @@ def _normalize_source_posted_at(value) -> datetime | None:
         return None
 
     try:
-        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        return _to_naive_utc(parsed)
     except ValueError:
         return None
 
