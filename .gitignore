@@ -9,5 +9,6 @@ dist/
 build/
 .ruff_cache/
 docs/shared-ingestion-on-demand-plan.md
+shared-ingestion-on-demand-plan.md
 
 
