@@ -83,6 +83,11 @@ async def validate_token(
         token = request.cookies.get(cookie_key)
 
         if not token:
+            authorization = str(request.headers.get("authorization") or "").strip()
+            if authorization.lower().startswith("bearer "):
+                token = authorization
+
+        if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
         user = await verify_token(
