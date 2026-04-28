@@ -25,6 +25,7 @@ from services.cache import cache_service
 from services.integrations import ats_service
 from services.jobs import global_catalog_service
 from services.messaging import messaging_service
+from services.pipeline import pipeline_metrics_service
 from services.rules import ingestion_relevance_policy
 from workers.common import managed_worker_resources
 
@@ -254,6 +255,39 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
                 filtered_jobs.append(rejected_job)
 
         raw_jobs = filtered_jobs
+        raw_jobs.sort(
+            key=lambda job: float(job.get("ingestion_relevance_score") or 0.0),
+            reverse=True,
+        )
+
+        await pipeline_metrics_service.increment_pipeline_run_metric(
+            run_id,
+            int(user_id),
+            pipeline_metrics_service.RUN_METRIC_FIELD_INGESTION_FETCHED,
+            redis_cache.redis,
+            delta=len(jobs),
+        )
+        await pipeline_metrics_service.increment_pipeline_run_metric(
+            run_id,
+            int(user_id),
+            pipeline_metrics_service.RUN_METRIC_FIELD_INGESTION_KEPT,
+            redis_cache.redis,
+            delta=len(raw_jobs),
+        )
+        await pipeline_metrics_service.increment_pipeline_run_metric(
+            run_id,
+            int(user_id),
+            pipeline_metrics_service.RUN_METRIC_FIELD_INGESTION_FILTERED,
+            redis_cache.redis,
+            delta=max(0, len(jobs) - len(raw_jobs)),
+        )
+        await pipeline_metrics_service.increment_pipeline_run_metric(
+            run_id,
+            int(user_id),
+            pipeline_metrics_service.RUN_METRIC_FIELD_INGESTION_HARD_REJECTED,
+            redis_cache.redis,
+            delta=hard_rejected_count,
+        )
 
         if not raw_jobs:
             logger.warning(

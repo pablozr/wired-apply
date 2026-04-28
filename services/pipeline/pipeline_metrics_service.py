@@ -15,6 +15,13 @@ from services.rules.scoring_context_policy import AI_PREFILTER_REASON_CODES
 
 RUN_METRIC_FIELD_JOBS_PROCESSED = "jobs_processed"
 RUN_METRIC_FIELD_JOBS_FAILED = "jobs_failed"
+RUN_METRIC_FIELD_DETERMINISTIC_PROCESSED = "deterministic_processed"
+RUN_METRIC_FIELD_AI_PLANNED = "ai_planned"
+RUN_METRIC_FIELD_INGESTION_FETCHED = "ingestion_fetched"
+RUN_METRIC_FIELD_INGESTION_KEPT = "ingestion_kept"
+RUN_METRIC_FIELD_INGESTION_FILTERED = "ingestion_filtered"
+RUN_METRIC_FIELD_INGESTION_HARD_REJECTED = "ingestion_hard_rejected"
+RUN_METRIC_FIELD_NORMALIZED = "normalized"
 RUN_METRIC_FIELD_AI_CALLS = "ai_calls"
 RUN_METRIC_FIELD_AI_CACHE_HITS = "ai_cache_hits"
 RUN_METRIC_FIELD_AI_CACHE_MISSES = "ai_cache_misses"
@@ -42,6 +49,13 @@ def _safe_int(raw_value) -> int:
 def _format_metrics_payload(
     processed_raw,
     failed_raw,
+    deterministic_processed_raw,
+    ai_planned_raw,
+    ingestion_fetched_raw,
+    ingestion_kept_raw,
+    ingestion_filtered_raw,
+    ingestion_hard_rejected_raw,
+    normalized_raw,
     ai_calls_raw,
     ai_cache_hits_raw,
     ai_cache_misses_raw,
@@ -51,6 +65,13 @@ def _format_metrics_payload(
 ) -> dict:
     processed_count = _safe_int(processed_raw)
     failed_count = _safe_int(failed_raw)
+    deterministic_processed = _safe_int(deterministic_processed_raw)
+    ai_planned = _safe_int(ai_planned_raw)
+    ingestion_fetched = _safe_int(ingestion_fetched_raw)
+    ingestion_kept = _safe_int(ingestion_kept_raw)
+    ingestion_filtered = _safe_int(ingestion_filtered_raw)
+    ingestion_hard_rejected = _safe_int(ingestion_hard_rejected_raw)
+    normalized_count = _safe_int(normalized_raw)
     ai_calls = _safe_int(ai_calls_raw)
     ai_cache_hits = _safe_int(ai_cache_hits_raw)
     ai_cache_misses = _safe_int(ai_cache_misses_raw)
@@ -72,6 +93,13 @@ def _format_metrics_payload(
         "jobsProcessed": processed_count,
         "jobsFailed": failed_count,
         "jobsFinished": processed_count + failed_count,
+        "deterministicProcessed": deterministic_processed,
+        "aiPlanned": ai_planned,
+        "ingestionFetched": ingestion_fetched,
+        "ingestionKept": ingestion_kept,
+        "ingestionFiltered": ingestion_filtered,
+        "ingestionHardRejected": ingestion_hard_rejected,
+        "normalized": normalized_count,
         "aiCalls": ai_calls,
         "aiCacheHits": ai_cache_hits,
         "aiCacheMisses": ai_cache_misses,
@@ -148,6 +176,13 @@ async def build_pipeline_run_metrics(run_id: str, user_id: int, redis_client) ->
                 metric_key,
                 RUN_METRIC_FIELD_JOBS_PROCESSED,
                 RUN_METRIC_FIELD_JOBS_FAILED,
+                RUN_METRIC_FIELD_DETERMINISTIC_PROCESSED,
+                RUN_METRIC_FIELD_AI_PLANNED,
+                RUN_METRIC_FIELD_INGESTION_FETCHED,
+                RUN_METRIC_FIELD_INGESTION_KEPT,
+                RUN_METRIC_FIELD_INGESTION_FILTERED,
+                RUN_METRIC_FIELD_INGESTION_HARD_REJECTED,
+                RUN_METRIC_FIELD_NORMALIZED,
                 RUN_METRIC_FIELD_AI_CALLS,
                 RUN_METRIC_FIELD_AI_CACHE_HITS,
                 RUN_METRIC_FIELD_AI_CACHE_MISSES,
@@ -163,7 +198,14 @@ async def build_pipeline_run_metrics(run_id: str, user_id: int, redis_client) ->
                 values[4],
                 values[5],
                 values[6],
-                values[7:],
+                values[7],
+                values[8],
+                values[9],
+                values[10],
+                values[11],
+                values[12],
+                values[13],
+                values[14:],
             )
     except Exception as e:
         logger.exception(e)
@@ -191,6 +233,13 @@ async def build_pipeline_run_metrics(run_id: str, user_id: int, redis_client) ->
     return _format_metrics_payload(
         legacy_values[0],
         legacy_values[1],
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
         legacy_values[2],
         legacy_values[3],
         legacy_values[4],

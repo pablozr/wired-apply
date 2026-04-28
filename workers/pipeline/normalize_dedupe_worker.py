@@ -18,6 +18,7 @@ from core.redis.redis import redis_cache
 from services.cache import cache_service
 from services.jobs import global_jobs_service
 from services.messaging import messaging_service
+from services.pipeline import pipeline_metrics_service
 from services.rules import deduplication_policy
 
 
@@ -233,6 +234,13 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
         if not row:
             logger.error("normalize_worker_failed_to_persist run_id=%s user_id=%s", run_id, user_id)
             return
+
+        await pipeline_metrics_service.increment_pipeline_run_metric(
+            run_id,
+            int(user_id),
+            pipeline_metrics_service.RUN_METRIC_FIELD_NORMALIZED,
+            redis_cache.redis,
+        )
 
         await messaging_service.publish(
             SCORING_JOBS_QUEUE,
