@@ -13,6 +13,7 @@ from services.rules import scoring_policy
 from services.rules.text_normalization import (
     ABOVE_LEVEL_TITLE_TOKENS,
     HARD_ABOVE_LEVEL_TITLE_TOKENS,
+    expand_role_tokens,
     infer_seniority_level,
     location_signals,
     tokenize_text,
@@ -44,6 +45,8 @@ def signal_from_context(
 
     title_tokens = tokenize_text(title)
     job_tokens = tokenize_text(title, description, requirements, " ".join(tech_stack), location)
+    expanded_title_tokens = expand_role_tokens(title_tokens)
+    expanded_job_tokens = expand_role_tokens(job_tokens)
 
     target_roles = ensure_str_list(profile_context.get("targetRoles"))
     must_have_skills = ensure_str_list(profile_context.get("mustHaveSkills"))
@@ -55,15 +58,17 @@ def signal_from_context(
     role_match = 0.0
     if target_roles:
         for role in target_roles:
-            role_tokens = tokenize_text(role)
+            role_tokens = expand_role_tokens(tokenize_text(role))
             if not role_tokens:
                 continue
 
-            overlap = len(title_tokens & role_tokens) / len(role_tokens)
+            title_overlap = len(expanded_title_tokens & role_tokens) / len(role_tokens)
+            context_overlap = len(expanded_job_tokens & role_tokens) / len(role_tokens)
+            overlap = max(title_overlap, context_overlap * 0.85)
             role_match = max(role_match, overlap)
     else:
         role_match = (
-            1.0 if any(token in title_tokens for token in {"engineer", "developer", "backend"}) else 0.55
+            1.0 if any(token in expanded_title_tokens for token in {"engineer", "developer", "backend", "software_role", "backend_role"}) else 0.55
         )
 
     candidate_seniority = infer_seniority_level(
@@ -95,7 +100,7 @@ def signal_from_context(
         if not skill_tokens:
             continue
 
-        if skill_tokens & job_tokens:
+        if expand_role_tokens(skill_tokens) & expanded_job_tokens:
             skill_hits += 1
 
     skill_overlap = (
@@ -106,7 +111,7 @@ def signal_from_context(
     nice_hits = 0
     for skill in nice_to_have_skills[:20]:
         skill_tokens = tokenize_text(skill)
-        if skill_tokens & job_tokens:
+        if expand_role_tokens(skill_tokens) & expanded_job_tokens:
             nice_hits += 1
 
     nice_overlap = (nice_hits / nice_total) if nice_total else 0.5
@@ -330,24 +335,30 @@ def evaluate_ai_prefilter(
     title_hard_above = bool(signal_details.get("titleHardAboveMarker"))
 
     reason = None
+    weak_signal_reasons: list[str] = []
+
     if float(deterministic_score) < float(min_deterministic_score):
-        reason = "below_deterministic_threshold"
-    elif role_match < float(min_role_match):
-        reason = "low_role_match"
-    elif skill_total > 0 and skill_overlap < float(min_skill_overlap):
-        reason = "low_skill_overlap"
-    elif work_model_signal < float(min_work_model_signal):
-        reason = "low_work_model_signal"
-    elif location_signal < float(min_location_signal):
-        reason = "low_location_signal"
-    elif seniority_gap is not None and seniority_gap > max(0, int(max_seniority_gap)):
+        weak_signal_reasons.append("below_deterministic_threshold")
+    if role_match < float(min_role_match):
+        weak_signal_reasons.append("low_role_match")
+    if skill_total > 0 and skill_overlap < float(min_skill_overlap):
+        weak_signal_reasons.append("low_skill_overlap")
+    if work_model_signal < float(min_work_model_signal):
+        weak_signal_reasons.append("low_work_model_signal")
+    if location_signal < float(min_location_signal):
+        weak_signal_reasons.append("low_location_signal")
+
+    if seniority_gap is not None and seniority_gap > max(0, int(max_seniority_gap)):
         reason = "high_seniority_gap"
     elif (
         candidate_seniority
         and int(candidate_seniority) <= 2
         and title_hard_above
+        and role_match < max(0.45, float(min_role_match))
     ):
         reason = "title_above_candidate_level"
+    elif len(weak_signal_reasons) >= 3:
+        reason = weak_signal_reasons[0]
 
     return {
         "allowAi": reason is None,
@@ -360,6 +371,7 @@ def evaluate_ai_prefilter(
             "locationSignal": location_signal,
             "workModelSignal": work_model_signal,
             "seniorityGap": seniority_gap,
+            "weakSignalReasons": weak_signal_reasons,
         },
     }
 

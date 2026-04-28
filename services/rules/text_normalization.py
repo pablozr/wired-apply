@@ -181,6 +181,18 @@ _REMOTE_SYNONYMS = frozenset({
     "remote", "remoto", "anywhere", "worldwide", "global", "wfh",
 })
 
+_SOFTWARE_ROLE_SYNONYMS = frozenset({
+    "developer", "desenvolvedor", "engineer", "engenheiro", "software",
+})
+
+_BACKEND_ROLE_SYNONYMS = frozenset({
+    "backend", "api", "server", "serverside",
+})
+
+_PLATFORM_ROLE_SYNONYMS = frozenset({
+    "platform", "plataforma", "infra", "infrastructure", "devops", "sre",
+})
+
 
 def _expand_location_tokens(text: str) -> set[str]:
     base = normalize_text(text)
@@ -222,6 +234,34 @@ def location_accepts_remote(preferred_locations: list[str]) -> bool:
             return True
 
     return False
+
+
+def work_model_prefers_remote(preferred_work_model: str) -> bool:
+    return _is_remote_text(preferred_work_model)
+
+
+def expand_role_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens or set())
+
+    if {"back", "end"}.issubset(expanded):
+        expanded.update({"backend", "serverside"})
+
+    if {"front", "end"}.issubset(expanded):
+        expanded.add("frontend")
+
+    if {"full", "stack"}.issubset(expanded):
+        expanded.add("fullstack")
+
+    if expanded & _SOFTWARE_ROLE_SYNONYMS:
+        expanded.add("software_role")
+
+    if expanded & _BACKEND_ROLE_SYNONYMS:
+        expanded.add("backend_role")
+
+    if expanded & _PLATFORM_ROLE_SYNONYMS:
+        expanded.add("platform_role")
+
+    return expanded
 
 
 def location_matches(job_location: str, preferred_locations: list[str]) -> bool:
@@ -285,7 +325,8 @@ def location_signals(
         elif "onsite" in work_model or "on-site" in work_model or "presencial" in work_model:
             work_model_signal = 0.95 if not (is_remote or is_hybrid) else 0.40
 
-    accepts_remote = location_accepts_remote(preferred_locations)
+    prefers_remote = work_model_prefers_remote(preferred_work_model)
+    accepts_remote = location_accepts_remote(preferred_locations) or prefers_remote
     has_match = False
     location_signal = work_model_signal
 

@@ -1,6 +1,7 @@
 from services.rules.text_normalization import (
     HARD_ABOVE_LEVEL_TITLE_TOKENS,
     ABOVE_LEVEL_TITLE_TOKENS,
+    expand_role_tokens,
     infer_seniority_level,
     list_from_value,
     location_signals,
@@ -40,6 +41,8 @@ def evaluate_job_relevance(
 
     title_tokens = tokenize_text(title)
     job_tokens = tokenize_text(title, description, requirements, " ".join(tech_stack), location)
+    expanded_title_tokens = expand_role_tokens(title_tokens)
+    expanded_job_tokens = expand_role_tokens(job_tokens)
 
     target_roles = list_from_value(candidate_context.get("targetRoles"))
     must_have_skills = list_from_value(candidate_context.get("mustHaveSkills"))
@@ -51,15 +54,17 @@ def evaluate_job_relevance(
     role_match = 0.0
     if target_roles:
         for role in target_roles:
-            role_tokens = tokenize_text(role)
+            role_tokens = expand_role_tokens(tokenize_text(role))
             if not role_tokens:
                 continue
 
-            overlap = len(title_tokens & role_tokens) / len(role_tokens)
+            title_overlap = len(expanded_title_tokens & role_tokens) / len(role_tokens)
+            context_overlap = len(expanded_job_tokens & role_tokens) / len(role_tokens)
+            overlap = max(title_overlap, context_overlap * 0.85)
             role_match = max(role_match, overlap)
     else:
         role_match = (
-            1.0 if any(token in title_tokens for token in {"engineer", "developer", "backend"}) else 0.55
+            1.0 if any(token in expanded_title_tokens for token in {"engineer", "developer", "backend", "software_role", "backend_role"}) else 0.55
         )
 
     candidate_seniority = infer_seniority_level(
@@ -88,7 +93,7 @@ def evaluate_job_relevance(
     skill_hits = 0
     for skill in candidate_skills:
         skill_tokens = tokenize_text(skill)
-        if skill_tokens and skill_tokens & job_tokens:
+        if skill_tokens and expand_role_tokens(skill_tokens) & expanded_job_tokens:
             skill_hits += 1
 
     skill_overlap = (skill_hits / len(candidate_skills)) if candidate_skills else 0.55
@@ -97,7 +102,7 @@ def evaluate_job_relevance(
     nice_hits = 0
     for skill in nice_to_have_skills[:20]:
         skill_tokens = tokenize_text(skill)
-        if skill_tokens and skill_tokens & job_tokens:
+        if skill_tokens and expand_role_tokens(skill_tokens) & expanded_job_tokens:
             nice_hits += 1
 
     nice_overlap = (nice_hits / nice_total) if nice_total else 0.50
@@ -123,7 +128,7 @@ def evaluate_job_relevance(
     location_match = loc["locationMatch"]
     accepts_remote = loc["acceptsRemote"]
 
-    hard_reject_reasons: list[str] = []
+    penalty_reasons: list[str] = []
 
     if (
         candidate_seniority
@@ -131,7 +136,8 @@ def evaluate_job_relevance(
         and job_seniority
         and (job_seniority - candidate_seniority) >= 2
     ):
-        hard_reject_reasons.append("seniority_gap_too_high")
+        seniority_signal = min(seniority_signal, 0.12)
+        penalty_reasons.append("seniority_gap_too_high")
 
     if (
         candidate_seniority
@@ -139,17 +145,22 @@ def evaluate_job_relevance(
         and not job_seniority
         and (title_tokens & HARD_ABOVE_LEVEL_TITLE_TOKENS)
     ):
-        hard_reject_reasons.append("title_above_candidate_level")
+        role_signal = min(role_signal, 0.15)
+        penalty_reasons.append("title_above_candidate_level")
 
     if preferred_locations and not location_match:
         if not is_remote:
-            hard_reject_reasons.append("location_mismatch_onsite")
+            location_signal = min(location_signal, 0.12)
+            penalty_reasons.append("location_mismatch_onsite")
         elif not accepts_remote:
-            hard_reject_reasons.append("location_mismatch_remote_not_accepted")
+            location_signal = min(location_signal, 0.10)
+            penalty_reasons.append("location_mismatch_remote_not_accepted")
 
     work_model_norm = normalize_text(preferred_work_model)
     if ("remote" in work_model_norm or "remoto" in work_model_norm) and not is_remote:
-        hard_reject_reasons.append("work_model_mismatch_remote_required")
+        work_model_signal = min(work_model_signal, 0.10)
+        location_signal = min(location_signal, 0.10)
+        penalty_reasons.append("work_model_mismatch_remote_required")
 
     relevance_ratio = max(
         0.0,
@@ -167,20 +178,18 @@ def evaluate_job_relevance(
     exploration_value = max(0.0, min(1.0, float(exploration_rate)))
 
     matched_by_threshold = relevance_ratio >= threshold_value
-    hard_rejected = bool(hard_reject_reasons)
     kept_by_exploration = (
-        not hard_rejected
-        and not matched_by_threshold
+        not matched_by_threshold
         and float(random_value) < exploration_value
     )
-    keep = (matched_by_threshold or kept_by_exploration) and not hard_rejected
+    keep = matched_by_threshold or kept_by_exploration
 
     reason = (
         "relevance="
         f"{relevance_ratio:.3f};role={role_match:.2f};skills={skill_hits}/{len(candidate_skills)};"
         f"seniority={candidate_seniority}->{job_seniority};"
         f"location={int(location_match)};remote={int(is_remote)};"
-        f"hard={','.join(hard_reject_reasons) if hard_reject_reasons else '0'};"
+        f"penalties={','.join(penalty_reasons) if penalty_reasons else '0'};"
         f"exploration={'1' if kept_by_exploration else '0'}"
     )
 
@@ -190,8 +199,8 @@ def evaluate_job_relevance(
         "scoreRatio": round(relevance_ratio, 4),
         "matchedByThreshold": matched_by_threshold,
         "explorationKept": kept_by_exploration,
-        "hardRejected": hard_rejected,
-        "hardRejectReasons": hard_reject_reasons,
+        "hardRejected": False,
+        "hardRejectReasons": [],
         "reason": reason,
         "details": {
             "roleMatch": round(role_match, 2),
