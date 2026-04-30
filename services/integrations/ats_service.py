@@ -4,15 +4,25 @@ import hashlib
 import re
 from datetime import date, datetime, timezone
 from typing import Any, Awaitable, Callable
+from urllib.parse import urljoin
 
 import httpx
 
 from core.config.config import (
     ATS_ASHBY_ORGANIZATIONS,
+    ATS_BREEZY_ORGANIZATIONS,
     ATS_ENABLE_MOCK_FALLBACK,
+    ATS_ENABLE_UNOFFICIAL_SOURCES,
     ATS_GREENHOUSE_BOARDS,
+    ATS_GUPY_API_TOKEN,
+    ATS_GUPY_COMPANIES,
     ATS_LEVER_COMPANIES,
     ATS_MAX_JOBS_PER_SOURCE,
+    ATS_RECRUITEE_COMPANIES,
+    ATS_SMARTRECRUITERS_COMPANIES,
+    ATS_WORKABLE_API_TOKEN,
+    ATS_WORKABLE_COMPANIES,
+    ATS_WORKDAY_COMPANIES,
 )
 from core.http.http_client import http_client
 from core.logger.logger import logger
@@ -22,7 +32,7 @@ def _parse_handles(raw_value: str) -> list[str]:
     handles: list[str] = []
     seen: set[str] = set()
 
-    for item in raw_value.split(","):
+    for item in re.split(r"[,;\n\r]+", raw_value):
         normalized = item.strip().lower()
         if not normalized or normalized in seen:
             continue
@@ -104,6 +114,14 @@ def _coerce_date(value: Any) -> date | None:
         return datetime.fromisoformat(parsed_iso.replace("Z", "+00:00")).date()
     except ValueError:
         return None
+
+
+def _coerce_query_datetime_iso(value: Any) -> str | None:
+    parsed_date = _coerce_date(value)
+    if parsed_date is None:
+        return None
+
+    return f"{parsed_date.isoformat()}T00:00:00Z"
 
 
 def _apply_date_window(
@@ -206,6 +224,78 @@ def _split_tokens(value: str | None) -> list[str]:
         seen.add(dedupe_key)
 
     return tokens
+
+
+def _absolute_url(base_url: str, raw_url: str | None) -> str | None:
+    url_text = _clean_text(raw_url)
+    if not url_text:
+        return None
+
+    try:
+        resolved = urljoin(base_url, url_text)
+    except Exception:
+        return None
+
+    resolved = resolved.strip()
+    if not resolved.startswith("http"):
+        return None
+
+    return resolved
+
+
+def _extract_job_links_from_html(
+    page_html: str,
+    base_url: str,
+    allowed_link_tokens: tuple[str, ...],
+    max_jobs: int,
+) -> list[dict]:
+    link_pattern = re.compile(
+        r"<a\s+[^>]*href=[\"'](?P<href>[^\"']+)[\"'][^>]*>(?P<label>.*?)</a>",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    links: list[dict] = []
+    seen_urls: set[str] = set()
+
+    for match in link_pattern.finditer(page_html):
+        href = _clean_text(match.group("href"))
+        if not href:
+            continue
+
+        href_lower = href.lower()
+        if href_lower.startswith("mailto:") or href_lower.startswith("tel:"):
+            continue
+
+        if not any(token in href_lower for token in allowed_link_tokens):
+            continue
+
+        absolute = _absolute_url(base_url, href)
+        if not absolute:
+            continue
+
+        dedupe_url = absolute.lower()
+        if dedupe_url in seen_urls:
+            continue
+
+        label = _plain_text(match.group("label"))
+        if not label:
+            continue
+
+        if len(label) > 180:
+            label = label[:180].strip()
+
+        links.append(
+            {
+                "title": label,
+                "url": absolute,
+            }
+        )
+        seen_urls.add(dedupe_url)
+
+        if len(links) >= max_jobs:
+            break
+
+    return links
 
 
 def _extract_tech_stack(*texts: str | None) -> list[str]:
@@ -746,6 +836,936 @@ async def _fetch_ashby_jobs(
     return jobs
 
 
+async def _fetch_breezy_jobs(
+    organization: str,
+    client: httpx.AsyncClient,
+    max_jobs: int,
+) -> list[dict]:
+    response = await client.get(
+        f"https://{organization}.breezy.hr/json",
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    if not isinstance(payload, list):
+        return []
+
+    jobs: list[dict] = []
+    for raw_job in payload[:max_jobs]:
+        if not isinstance(raw_job, dict):
+            continue
+
+        title = _clean_text(raw_job.get("name"))
+        if not title:
+            continue
+
+        location = _clean_text(raw_job.get("location"))
+        locations = raw_job.get("locations")
+        if not location and isinstance(locations, list) and locations:
+            location = _clean_text(locations[0])
+
+        source_url = _clean_text(raw_job.get("url"))
+        source_posted_at = _parse_source_posted_at(raw_job.get("published_date"))
+        company = (
+            _clean_text((raw_job.get("company") or {}).get("name"))
+            if isinstance(raw_job.get("company"), dict)
+            else None
+        ) or organization
+
+        employment_type = _clean_text(raw_job.get("type"))
+        seniority_hint = _infer_seniority_hint(title, None)
+
+        location_text = (location or "").lower()
+        remote_policy = None
+        if "remote" in location_text or "remoto" in location_text:
+            remote_policy = "REMOTE"
+        elif "hybrid" in location_text or "hibrido" in location_text:
+            remote_policy = "HYBRID"
+
+        external_job_id = _stable_external_job_id(
+            "breezy",
+            organization,
+            raw_job.get("id") or raw_job.get("friendly_id"),
+            source_url,
+            title,
+        )
+
+        jobs.append(
+            {
+                "title": title,
+                "company": company,
+                "location": location,
+                "description": None,
+                "requirements": None,
+                "employment_type": employment_type,
+                "seniority_hint": seniority_hint,
+                "remote_policy": remote_policy,
+                "tech_stack": _extract_tech_stack(title),
+                "source": "breezy",
+                "source_target": organization,
+                "source_url": source_url,
+                "external_job_id": external_job_id,
+                "source_posted_at": source_posted_at,
+            }
+        )
+
+    return jobs
+
+
+async def _fetch_smartrecruiters_jobs(
+    company: str,
+    client: httpx.AsyncClient,
+    max_jobs: int,
+    released_after: str | None = None,
+) -> list[dict]:
+    jobs: list[dict] = []
+    offset = 0
+    per_page = max(1, min(100, max_jobs))
+
+    while len(jobs) < max_jobs:
+        request_params: dict[str, Any] = {
+            "offset": offset,
+            "limit": per_page,
+        }
+        if released_after:
+            request_params["releasedAfter"] = released_after
+
+        response = await client.get(
+            f"https://api.smartrecruiters.com/v1/companies/{company}/postings",
+            params=request_params,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        if not isinstance(payload, dict):
+            break
+
+        raw_jobs = payload.get("content")
+        if not isinstance(raw_jobs, list) or not raw_jobs:
+            break
+
+        for raw_job in raw_jobs:
+            if not isinstance(raw_job, dict):
+                continue
+
+            title = _clean_text(raw_job.get("name"))
+            if not title:
+                continue
+
+            location_payload = raw_job.get("location")
+            location = None
+            remote_policy = None
+            if isinstance(location_payload, dict):
+                location = _clean_text(location_payload.get("fullLocation")) or _clean_text(
+                    ", ".join(
+                        [
+                            str(part).strip()
+                            for part in [
+                                location_payload.get("city"),
+                                location_payload.get("region"),
+                                location_payload.get("country"),
+                            ]
+                            if str(part).strip()
+                        ]
+                    )
+                )
+                if location_payload.get("remote") is True:
+                    remote_policy = "REMOTE"
+                elif location_payload.get("hybrid") is True:
+                    remote_policy = "HYBRID"
+
+            source_url = _clean_text(raw_job.get("ref"))
+            source_posted_at = _parse_source_posted_at(raw_job.get("releasedDate"))
+
+            company_payload = raw_job.get("company")
+            company_name = (
+                _clean_text(company_payload.get("name"))
+                if isinstance(company_payload, dict)
+                else None
+            ) or company
+
+            experience_payload = raw_job.get("experienceLevel")
+            experience_label = (
+                _clean_text(experience_payload.get("label"))
+                if isinstance(experience_payload, dict)
+                else None
+            )
+            seniority_hint = _infer_seniority_hint(title, None, experience_label)
+
+            employment_payload = raw_job.get("typeOfEmployment")
+            employment_type = (
+                _clean_text(employment_payload.get("label"))
+                if isinstance(employment_payload, dict)
+                else None
+            )
+
+            custom_fields = raw_job.get("customField")
+            requirement_chunks: list[str] = []
+            if isinstance(custom_fields, list):
+                for custom_field in custom_fields:
+                    if not isinstance(custom_field, dict):
+                        continue
+
+                    field_label = (_clean_text(custom_field.get("fieldLabel")) or "").lower()
+                    value_label = _clean_text(custom_field.get("valueLabel"))
+                    if not field_label or not value_label:
+                        continue
+
+                    if (
+                        "require" in field_label
+                        or "skill" in field_label
+                        or "qualification" in field_label
+                        or "stack" in field_label
+                    ):
+                        requirement_chunks.append(value_label)
+
+            requirements = _clean_text("; ".join(requirement_chunks))
+            description = None
+            if requirements:
+                description = f"Department: {(_clean_text((raw_job.get('department') or {}).get('label')) if isinstance(raw_job.get('department'), dict) else '') or 'N/A'}"
+
+            external_job_id = _stable_external_job_id(
+                "smartrecruiters",
+                company,
+                raw_job.get("id") or raw_job.get("uuid"),
+                source_url,
+                title,
+            )
+
+            jobs.append(
+                {
+                    "title": title,
+                    "company": company_name,
+                    "location": location,
+                    "description": description,
+                    "requirements": requirements,
+                    "employment_type": employment_type,
+                    "seniority_hint": seniority_hint,
+                    "remote_policy": remote_policy,
+                    "tech_stack": _extract_tech_stack(title, requirements),
+                    "source": "smartrecruiters",
+                    "source_target": company,
+                    "source_url": source_url,
+                    "external_job_id": external_job_id,
+                    "source_posted_at": source_posted_at,
+                }
+            )
+
+            if len(jobs) >= max_jobs:
+                break
+
+        if len(raw_jobs) < per_page:
+            break
+
+        offset += len(raw_jobs)
+
+    return jobs[:max_jobs]
+
+
+async def _fetch_recruitee_jobs(
+    company: str,
+    client: httpx.AsyncClient,
+    max_jobs: int,
+) -> list[dict]:
+    response = await client.get(
+        f"https://{company}.recruitee.com/api/offers/",
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    raw_jobs = payload.get("offers") if isinstance(payload, dict) else []
+    if not isinstance(raw_jobs, list):
+        return []
+
+    jobs: list[dict] = []
+    for raw_job in raw_jobs[:max_jobs]:
+        if not isinstance(raw_job, dict):
+            continue
+
+        title = _clean_text(raw_job.get("title"))
+        if not title:
+            continue
+
+        location = _clean_text(raw_job.get("location"))
+        if not location:
+            location = _clean_text(
+                ", ".join(
+                    [
+                        str(part).strip()
+                        for part in [
+                            raw_job.get("city"),
+                            raw_job.get("state_name"),
+                            raw_job.get("country"),
+                        ]
+                        if str(part).strip()
+                    ]
+                )
+            )
+
+        source_url = _clean_text(raw_job.get("careers_url")) or _clean_text(
+            raw_job.get("careers_apply_url")
+        )
+        source_posted_at = _parse_source_posted_at(
+            raw_job.get("published_at")
+            or raw_job.get("created_at")
+            or raw_job.get("updated_at")
+        )
+
+        description = _plain_text(raw_job.get("description"))
+        requirements = _plain_text(raw_job.get("requirements"))
+        if requirements is None:
+            requirements = _extract_requirements_from_text(description)
+        if requirements:
+            requirements = requirements[:3000]
+
+        seniority_hint = _infer_seniority_hint(
+            title,
+            description,
+            _clean_text(raw_job.get("experience_code"))
+            or _clean_text(raw_job.get("experience_level")),
+        )
+
+        remote_policy = None
+        if raw_job.get("remote") is True:
+            remote_policy = "REMOTE"
+        elif raw_job.get("hybrid") is True:
+            remote_policy = "HYBRID"
+        elif raw_job.get("on_site") is True:
+            remote_policy = "ONSITE"
+
+        employment_type = _clean_text(raw_job.get("employment_type_code")) or _clean_text(
+            raw_job.get("employment_type")
+        )
+
+        external_job_id = _stable_external_job_id(
+            "recruitee",
+            company,
+            raw_job.get("id") or raw_job.get("guid") or raw_job.get("slug"),
+            source_url,
+            title,
+        )
+
+        jobs.append(
+            {
+                "title": title,
+                "company": _clean_text(raw_job.get("company_name")) or company,
+                "location": location,
+                "description": description,
+                "requirements": requirements,
+                "employment_type": employment_type,
+                "seniority_hint": seniority_hint,
+                "remote_policy": remote_policy,
+                "tech_stack": _extract_tech_stack(description, requirements, title),
+                "source": "recruitee",
+                "source_target": company,
+                "source_url": source_url,
+                "external_job_id": external_job_id,
+                "source_posted_at": source_posted_at,
+            }
+        )
+
+    return jobs
+
+
+async def _fetch_workable_jobs(
+    company: str,
+    client: httpx.AsyncClient,
+    max_jobs: int,
+    updated_after: str | None = None,
+    created_after: str | None = None,
+) -> list[dict]:
+    token = _clean_text(ATS_WORKABLE_API_TOKEN)
+    jobs: list[dict] = []
+
+    if token:
+        per_page = max(1, min(100, max_jobs))
+        request_headers = {"Authorization": f"Bearer {token}"}
+        request_url: str | None = f"https://{company}.workable.com/spi/v3/jobs"
+        request_params: dict[str, Any] | None = {
+            "state": "published",
+            "limit": per_page,
+            "include_fields": "description,requirements,employment_type,location,created_at,updated_at",
+        }
+
+        if updated_after:
+            request_params["updated_after"] = updated_after
+        if created_after:
+            request_params["created_after"] = created_after
+
+        try:
+            while request_url and len(jobs) < max_jobs:
+                response = await client.get(
+                    request_url,
+                    headers=request_headers,
+                    params=request_params,
+                    follow_redirects=True,
+                )
+                response.raise_for_status()
+
+                payload = response.json()
+                raw_jobs = (
+                    payload.get("results")
+                    or payload.get("jobs")
+                    or payload.get("data")
+                    or []
+                )
+                if not isinstance(raw_jobs, list) or not raw_jobs:
+                    break
+
+                for raw_job in raw_jobs:
+                    if not isinstance(raw_job, dict):
+                        continue
+
+                    title = _clean_text(raw_job.get("title") or raw_job.get("name"))
+                    if not title:
+                        continue
+
+                    source_url = _clean_text(
+                        raw_job.get("url")
+                        or raw_job.get("application_url")
+                        or raw_job.get("shortlink")
+                    )
+
+                    shortcode = _clean_text(raw_job.get("shortcode") or raw_job.get("code"))
+                    if source_url is None and shortcode:
+                        source_url = f"https://apply.workable.com/{company}/j/{shortcode}/"
+
+                    location_payload = raw_job.get("location")
+                    location = None
+                    if isinstance(location_payload, dict):
+                        location = _clean_text(
+                            location_payload.get("location_str")
+                            or location_payload.get("city")
+                            or ", ".join(
+                                [
+                                    str(part).strip()
+                                    for part in [
+                                        location_payload.get("city"),
+                                        location_payload.get("region"),
+                                        location_payload.get("country"),
+                                    ]
+                                    if str(part).strip()
+                                ]
+                            )
+                        )
+                    elif isinstance(location_payload, str):
+                        location = _clean_text(location_payload)
+
+                    description = _plain_text(
+                        raw_job.get("description")
+                        or raw_job.get("description_plain")
+                    )
+                    requirements = _plain_text(raw_job.get("requirements"))
+                    if requirements is None:
+                        requirements = _extract_requirements_from_text(description)
+                    if requirements:
+                        requirements = requirements[:3000]
+
+                    employment_type_payload = raw_job.get("employment_type")
+                    employment_type = (
+                        _clean_text(employment_type_payload.get("name"))
+                        if isinstance(employment_type_payload, dict)
+                        else _clean_text(employment_type_payload)
+                    )
+
+                    remote_policy = None
+                    if raw_job.get("remote") is True:
+                        remote_policy = "REMOTE"
+                    elif raw_job.get("hybrid") is True:
+                        remote_policy = "HYBRID"
+                    elif location and "remote" in location.lower():
+                        remote_policy = "REMOTE"
+
+                    seniority_hint = _infer_seniority_hint(
+                        title,
+                        description,
+                        _clean_text(raw_job.get("seniority"))
+                        or _clean_text(raw_job.get("experience")),
+                    )
+
+                    source_posted_at = _parse_source_posted_at(
+                        raw_job.get("updated_at")
+                        or raw_job.get("created_at")
+                        or raw_job.get("published_at")
+                    )
+
+                    external_job_id = _stable_external_job_id(
+                        "workable",
+                        company,
+                        raw_job.get("id") or shortcode,
+                        source_url,
+                        title,
+                    )
+
+                    company_name = (
+                        _clean_text((raw_job.get("account") or {}).get("name"))
+                        if isinstance(raw_job.get("account"), dict)
+                        else None
+                    ) or company
+
+                    jobs.append(
+                        {
+                            "title": title,
+                            "company": company_name,
+                            "location": location,
+                            "description": description,
+                            "requirements": requirements,
+                            "employment_type": employment_type,
+                            "seniority_hint": seniority_hint,
+                            "remote_policy": remote_policy,
+                            "tech_stack": _extract_tech_stack(
+                                title,
+                                description,
+                                requirements,
+                            ),
+                            "source": "workable",
+                            "source_target": company,
+                            "source_url": source_url,
+                            "external_job_id": external_job_id,
+                            "source_posted_at": source_posted_at,
+                        }
+                    )
+
+                    if len(jobs) >= max_jobs:
+                        return jobs[:max_jobs]
+
+                paging_payload = payload.get("paging") if isinstance(payload, dict) else None
+                next_url = (
+                    _clean_text(paging_payload.get("next"))
+                    if isinstance(paging_payload, dict)
+                    else None
+                )
+                request_url = _absolute_url(str(response.url), next_url) if next_url else None
+                request_params = None
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code if error.response else None
+            logger.warning(
+                "workable_official_http_error target=%s status=%s",
+                company,
+                status_code,
+            )
+            if not ATS_ENABLE_UNOFFICIAL_SOURCES:
+                raise
+        except httpx.HTTPError as error:
+            logger.warning(
+                "workable_official_transport_error target=%s error=%s",
+                company,
+                error,
+            )
+            if not ATS_ENABLE_UNOFFICIAL_SOURCES:
+                raise
+
+        if jobs:
+            return jobs[:max_jobs]
+
+    if not ATS_ENABLE_UNOFFICIAL_SOURCES:
+        if token is None:
+            logger.warning(
+                "workable_official_missing_token target=%s",
+                company,
+            )
+        return []
+
+    base_url = f"https://apply.workable.com/{company}/"
+    response = await client.get(base_url, follow_redirects=True)
+    response.raise_for_status()
+
+    link_rows = _extract_job_links_from_html(
+        response.text,
+        str(response.url),
+        ("/j/", "/jobs/", f"/{company}/"),
+        max_jobs,
+    )
+
+    jobs: list[dict] = []
+    for row in link_rows:
+        title = _clean_text(row.get("title"))
+        source_url = _clean_text(row.get("url"))
+        if not title or not source_url:
+            continue
+
+        external_job_id = _stable_external_job_id(
+            "workable",
+            company,
+            None,
+            source_url,
+            title,
+        )
+
+        jobs.append(
+            {
+                "title": title,
+                "company": company,
+                "location": None,
+                "description": None,
+                "requirements": None,
+                "employment_type": None,
+                "seniority_hint": _infer_seniority_hint(title, None),
+                "remote_policy": None,
+                "tech_stack": _extract_tech_stack(title),
+                "source": "workable",
+                "source_target": company,
+                "source_url": source_url,
+                "external_job_id": external_job_id,
+                "source_posted_at": None,
+            }
+        )
+
+    return jobs
+
+
+async def _fetch_gupy_jobs(
+    company: str,
+    client: httpx.AsyncClient,
+    max_jobs: int,
+    updated_after: str | None = None,
+) -> list[dict]:
+    token = _clean_text(ATS_GUPY_API_TOKEN)
+    jobs: list[dict] = []
+
+    if token:
+        request_headers = {"Authorization": f"Bearer {token}"}
+        per_page = max(1, min(100, max_jobs))
+        next_page_token: str | None = None
+
+        try:
+            while len(jobs) < max_jobs:
+                request_params: dict[str, Any] = {
+                    "status": "published",
+                    "limit": per_page,
+                    "careerPageIds": company,
+                }
+                if updated_after:
+                    request_params["updatedAfter"] = updated_after
+                if next_page_token:
+                    request_params["pageToken"] = next_page_token
+
+                response = await client.get(
+                    "https://api.gupy.io/api/v2/jobs",
+                    headers=request_headers,
+                    params=request_params,
+                )
+                response.raise_for_status()
+
+                payload = response.json()
+                raw_jobs = (
+                    payload.get("jobs")
+                    or payload.get("results")
+                    or payload.get("data")
+                    or payload.get("content")
+                    or []
+                )
+                if not isinstance(raw_jobs, list) or not raw_jobs:
+                    break
+
+                for raw_job in raw_jobs:
+                    if not isinstance(raw_job, dict):
+                        continue
+
+                    title = _clean_text(raw_job.get("title") or raw_job.get("name"))
+                    if not title:
+                        continue
+
+                    source_url = _clean_text(
+                        raw_job.get("jobUrl")
+                        or raw_job.get("url")
+                        or raw_job.get("publicUrl")
+                        or raw_job.get("externalUrl")
+                    )
+
+                    if source_url and not source_url.startswith("http"):
+                        source_url = _absolute_url(f"https://{company}.gupy.io/", source_url)
+
+                    location = None
+                    location_payload = raw_job.get("location")
+                    if isinstance(location_payload, dict):
+                        location = _clean_text(
+                            location_payload.get("name")
+                            or ", ".join(
+                                [
+                                    str(part).strip()
+                                    for part in [
+                                        location_payload.get("city"),
+                                        location_payload.get("state"),
+                                        location_payload.get("country"),
+                                    ]
+                                    if str(part).strip()
+                                ]
+                            )
+                        )
+                    else:
+                        location = _clean_text(location_payload)
+
+                    description = _plain_text(raw_job.get("description"))
+                    requirements = _plain_text(raw_job.get("requirements"))
+                    if requirements is None:
+                        requirements = _extract_requirements_from_text(description)
+                    if requirements:
+                        requirements = requirements[:3000]
+
+                    employment_type = _clean_text(
+                        raw_job.get("employmentType")
+                        or raw_job.get("contractType")
+                    )
+
+                    remote_policy = None
+                    if raw_job.get("remote") is True:
+                        remote_policy = "REMOTE"
+                    elif raw_job.get("hybrid") is True:
+                        remote_policy = "HYBRID"
+                    elif raw_job.get("onSite") is True:
+                        remote_policy = "ONSITE"
+
+                    if remote_policy is None:
+                        work_model = (_clean_text(raw_job.get("workModel")) or "").lower()
+                        if "remote" in work_model or "remoto" in work_model:
+                            remote_policy = "REMOTE"
+                        elif "hybrid" in work_model or "hibrido" in work_model:
+                            remote_policy = "HYBRID"
+
+                    source_posted_at = _parse_source_posted_at(
+                        raw_job.get("updatedAt")
+                        or raw_job.get("publishedAt")
+                        or raw_job.get("createdAt")
+                    )
+
+                    seniority_hint = _infer_seniority_hint(
+                        title,
+                        description,
+                        _clean_text(raw_job.get("seniority"))
+                        or _clean_text(raw_job.get("experienceLevel")),
+                    )
+
+                    external_job_id = _stable_external_job_id(
+                        "gupy",
+                        company,
+                        raw_job.get("id") or raw_job.get("code"),
+                        source_url,
+                        title,
+                    )
+
+                    company_name = _clean_text(
+                        raw_job.get("companyName")
+                        or ((raw_job.get("company") or {}).get("name") if isinstance(raw_job.get("company"), dict) else None)
+                    ) or company
+
+                    jobs.append(
+                        {
+                            "title": title,
+                            "company": company_name,
+                            "location": location,
+                            "description": description,
+                            "requirements": requirements,
+                            "employment_type": employment_type,
+                            "seniority_hint": seniority_hint,
+                            "remote_policy": remote_policy,
+                            "tech_stack": _extract_tech_stack(
+                                title,
+                                description,
+                                requirements,
+                            ),
+                            "source": "gupy",
+                            "source_target": company,
+                            "source_url": source_url,
+                            "external_job_id": external_job_id,
+                            "source_posted_at": source_posted_at,
+                        }
+                    )
+
+                    if len(jobs) >= max_jobs:
+                        return jobs[:max_jobs]
+
+                next_page_token = _clean_text(
+                    payload.get("nextPageToken")
+                    or payload.get("next_page_token")
+                    or (
+                        (payload.get("pagination") or {}).get("nextPageToken")
+                        if isinstance(payload.get("pagination"), dict)
+                        else None
+                    )
+                )
+                if not next_page_token:
+                    break
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code if error.response else None
+            logger.warning(
+                "gupy_official_http_error target=%s status=%s",
+                company,
+                status_code,
+            )
+            if not ATS_ENABLE_UNOFFICIAL_SOURCES:
+                raise
+        except httpx.HTTPError as error:
+            logger.warning(
+                "gupy_official_transport_error target=%s error=%s",
+                company,
+                error,
+            )
+            if not ATS_ENABLE_UNOFFICIAL_SOURCES:
+                raise
+
+        if jobs:
+            return jobs[:max_jobs]
+
+    if not ATS_ENABLE_UNOFFICIAL_SOURCES:
+        if token is None:
+            logger.warning("gupy_official_missing_token target=%s", company)
+        return []
+
+    base_url = f"https://{company}.gupy.io/"
+    response = await client.get(base_url, follow_redirects=True)
+    response.raise_for_status()
+
+    link_rows = _extract_job_links_from_html(
+        response.text,
+        str(response.url),
+        ("/jobs/", "/job/", "/vagas/"),
+        max_jobs,
+    )
+
+    jobs = []
+    for row in link_rows:
+        title = _clean_text(row.get("title"))
+        source_url = _clean_text(row.get("url"))
+        if not title or not source_url:
+            continue
+
+        external_job_id = _stable_external_job_id(
+            "gupy",
+            company,
+            None,
+            source_url,
+            title,
+        )
+
+        jobs.append(
+            {
+                "title": title,
+                "company": company,
+                "location": None,
+                "description": None,
+                "requirements": None,
+                "employment_type": None,
+                "seniority_hint": _infer_seniority_hint(title, None),
+                "remote_policy": None,
+                "tech_stack": _extract_tech_stack(title),
+                "source": "gupy",
+                "source_target": company,
+                "source_url": source_url,
+                "external_job_id": external_job_id,
+                "source_posted_at": None,
+            }
+        )
+
+    return jobs
+
+
+async def _fetch_workday_jobs(
+    company: str,
+    client: httpx.AsyncClient,
+    max_jobs: int,
+) -> list[dict]:
+    site_candidates = (
+        "External",
+        "External_Career_Site",
+        "Careers",
+        "CareerSite",
+        "Careers_External",
+    )
+
+    jobs: list[dict] = []
+    for site_name in site_candidates:
+        response = await client.get(
+            f"https://{company}.wd3.myworkdayjobs.com/wday/cxs/{company}/{site_name}/jobs",
+            params={"limit": max(1, min(100, max_jobs)), "offset": 0},
+            follow_redirects=True,
+        )
+
+        if response.status_code != 200:
+            continue
+
+        if "application/json" not in (response.headers.get("content-type") or ""):
+            continue
+
+        payload = response.json()
+        if not isinstance(payload, dict):
+            continue
+
+        raw_items = (
+            payload.get("jobPostings")
+            or payload.get("jobs")
+            or payload.get("content")
+            or []
+        )
+        if not isinstance(raw_items, list) or not raw_items:
+            continue
+
+        for raw_item in raw_items[:max_jobs]:
+            if not isinstance(raw_item, dict):
+                continue
+
+            title = _clean_text(raw_item.get("title") or raw_item.get("name"))
+            if not title:
+                continue
+
+            source_url = _clean_text(raw_item.get("externalPath"))
+            if source_url and not source_url.startswith("http"):
+                source_url = _absolute_url(
+                    f"https://{company}.wd3.myworkdayjobs.com/en-US/{site_name}/",
+                    source_url,
+                )
+
+            location = _clean_text(
+                raw_item.get("locationsText")
+                or raw_item.get("location")
+                or raw_item.get("locations")
+            )
+
+            description = _plain_text(raw_item.get("description"))
+            requirements = _extract_requirements_from_text(description)
+
+            external_job_id = _stable_external_job_id(
+                "workday",
+                company,
+                raw_item.get("bulletFields") or raw_item.get("id"),
+                source_url,
+                title,
+            )
+
+            jobs.append(
+                {
+                    "title": title,
+                    "company": company,
+                    "location": location,
+                    "description": description,
+                    "requirements": requirements,
+                    "employment_type": None,
+                    "seniority_hint": _infer_seniority_hint(title, description),
+                    "remote_policy": None,
+                    "tech_stack": _extract_tech_stack(title, description, requirements),
+                    "source": "workday",
+                    "source_target": company,
+                    "source_url": source_url,
+                    "external_job_id": external_job_id,
+                    "source_posted_at": _parse_source_posted_at(
+                        raw_item.get("postedOn")
+                        or raw_item.get("postedDate")
+                        or raw_item.get("publishedAt")
+                    ),
+                }
+            )
+
+            if len(jobs) >= max_jobs:
+                return jobs[:max_jobs]
+
+        if jobs:
+            return jobs[:max_jobs]
+
+    return jobs[:max_jobs]
+
+
 async def _fetch_target(
     provider: str,
     target: str,
@@ -823,6 +1843,16 @@ async def fetch_jobs(
     greenhouse_boards = _parse_handles(ATS_GREENHOUSE_BOARDS)
     lever_companies = _parse_handles(ATS_LEVER_COMPANIES)
     ashby_organizations = _parse_handles(ATS_ASHBY_ORGANIZATIONS)
+    workable_companies = _parse_handles(ATS_WORKABLE_COMPANIES)
+    breezy_organizations = _parse_handles(ATS_BREEZY_ORGANIZATIONS)
+    smartrecruiters_companies = _parse_handles(ATS_SMARTRECRUITERS_COMPANIES)
+    recruitee_companies = _parse_handles(ATS_RECRUITEE_COMPANIES)
+    gupy_companies = _parse_handles(ATS_GUPY_COMPANIES)
+    workday_companies = _parse_handles(ATS_WORKDAY_COMPANIES)
+
+    window_start_iso = _coerce_query_datetime_iso(date_from)
+    workable_token_available = bool(_clean_text(ATS_WORKABLE_API_TOKEN))
+    gupy_token_available = bool(_clean_text(ATS_GUPY_API_TOKEN))
 
     configured_targets: list[tuple[str, str, Callable[[str, httpx.AsyncClient, int], Awaitable[list[dict]]]]] = []
     configured_targets.extend(
@@ -835,6 +1865,73 @@ async def fetch_jobs(
         ("ashby", organization, _fetch_ashby_jobs)
         for organization in ashby_organizations
     )
+    configured_targets.extend(
+        (
+            "smartrecruiters",
+            company,
+            lambda target, client, max_jobs, released_after=window_start_iso: _fetch_smartrecruiters_jobs(
+                target,
+                client,
+                max_jobs,
+                released_after=released_after,
+            ),
+        )
+        for company in smartrecruiters_companies
+    )
+    configured_targets.extend(
+        ("recruitee", company, _fetch_recruitee_jobs)
+        for company in recruitee_companies
+    )
+
+    if workable_token_available or ATS_ENABLE_UNOFFICIAL_SOURCES:
+        configured_targets.extend(
+            (
+                "workable",
+                company,
+                lambda target, client, max_jobs, updated_after=window_start_iso: _fetch_workable_jobs(
+                    target,
+                    client,
+                    max_jobs,
+                    updated_after=updated_after,
+                    created_after=updated_after,
+                ),
+            )
+            for company in workable_companies
+        )
+    elif workable_companies:
+        logger.warning(
+            "workable_sources_skipped_missing_token count=%s",
+            len(workable_companies),
+        )
+
+    if gupy_token_available or ATS_ENABLE_UNOFFICIAL_SOURCES:
+        configured_targets.extend(
+            (
+                "gupy",
+                company,
+                lambda target, client, max_jobs, updated_after=window_start_iso: _fetch_gupy_jobs(
+                    target,
+                    client,
+                    max_jobs,
+                    updated_after=updated_after,
+                ),
+            )
+            for company in gupy_companies
+        )
+    elif gupy_companies:
+        logger.warning(
+            "gupy_sources_skipped_missing_token count=%s",
+            len(gupy_companies),
+        )
+
+    if ATS_ENABLE_UNOFFICIAL_SOURCES:
+        configured_targets.extend(
+            ("breezy", organization, _fetch_breezy_jobs)
+            for organization in breezy_organizations
+        )
+        configured_targets.extend(
+            ("workday", company, _fetch_workday_jobs) for company in workday_companies
+        )
 
     if not configured_targets:
         if ATS_ENABLE_MOCK_FALLBACK:
@@ -953,6 +2050,14 @@ async def get_module_status() -> dict:
     greenhouse_boards = _parse_handles(ATS_GREENHOUSE_BOARDS)
     lever_companies = _parse_handles(ATS_LEVER_COMPANIES)
     ashby_organizations = _parse_handles(ATS_ASHBY_ORGANIZATIONS)
+    workable_companies = _parse_handles(ATS_WORKABLE_COMPANIES)
+    breezy_organizations = _parse_handles(ATS_BREEZY_ORGANIZATIONS)
+    smartrecruiters_companies = _parse_handles(ATS_SMARTRECRUITERS_COMPANIES)
+    recruitee_companies = _parse_handles(ATS_RECRUITEE_COMPANIES)
+    gupy_companies = _parse_handles(ATS_GUPY_COMPANIES)
+    workday_companies = _parse_handles(ATS_WORKDAY_COMPANIES)
+    workable_token_available = bool(_clean_text(ATS_WORKABLE_API_TOKEN))
+    gupy_token_available = bool(_clean_text(ATS_GUPY_API_TOKEN))
 
     return {
         "status": True,
@@ -963,7 +2068,33 @@ async def get_module_status() -> dict:
                 "greenhouse": len(greenhouse_boards),
                 "lever": len(lever_companies),
                 "ashby": len(ashby_organizations),
+                "workable": len(workable_companies),
+                "breezy": len(breezy_organizations),
+                "smartrecruiters": len(smartrecruiters_companies),
+                "recruitee": len(recruitee_companies),
+                "gupy": len(gupy_companies),
+                "workday": len(workday_companies),
             },
+            "sourcesActive": {
+                "greenhouse": len(greenhouse_boards),
+                "lever": len(lever_companies),
+                "ashby": len(ashby_organizations),
+                "workable": len(workable_companies)
+                if (workable_token_available or ATS_ENABLE_UNOFFICIAL_SOURCES)
+                else 0,
+                "breezy": len(breezy_organizations) if ATS_ENABLE_UNOFFICIAL_SOURCES else 0,
+                "smartrecruiters": len(smartrecruiters_companies),
+                "recruitee": len(recruitee_companies),
+                "gupy": len(gupy_companies)
+                if (gupy_token_available or ATS_ENABLE_UNOFFICIAL_SOURCES)
+                else 0,
+                "workday": len(workday_companies) if ATS_ENABLE_UNOFFICIAL_SOURCES else 0,
+            },
+            "auth": {
+                "workableTokenConfigured": workable_token_available,
+                "gupyTokenConfigured": gupy_token_available,
+            },
+            "unofficialSourcesEnabled": ATS_ENABLE_UNOFFICIAL_SOURCES,
             "mockFallbackEnabled": ATS_ENABLE_MOCK_FALLBACK,
             "maxJobsPerSource": ATS_MAX_JOBS_PER_SOURCE,
         },

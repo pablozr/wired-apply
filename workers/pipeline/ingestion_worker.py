@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import random
 import uuid
@@ -7,7 +8,11 @@ from datetime import date, datetime, timedelta
 from aio_pika.abc import AbstractIncomingMessage
 
 from core.config.config import (
+    DIGEST_EMAIL_QUEUE,
     INGESTION_JOBS_QUEUE,
+    INGESTION_ATS_EXPAND_DAYS_RANGE,
+    INGESTION_ATS_EXPAND_ENABLED,
+    INGESTION_ATS_EXPAND_MIN_JOBS,
     INGESTION_RELEVANCE_ENABLED,
     INGESTION_RELEVANCE_EXPLORATION_RATE,
     INGESTION_RELEVANCE_MIN_JOBS,
@@ -28,6 +33,48 @@ from services.messaging import messaging_service
 from services.pipeline import pipeline_metrics_service
 from services.rules import ingestion_relevance_policy
 from workers.common import managed_worker_resources
+
+
+async def _publish_empty_run_digest(user_id: int, run_id: str, digest_date: str) -> None:
+    await messaging_service.publish(
+        DIGEST_EMAIL_QUEUE,
+        {
+            "event_id": str(uuid.uuid4()),
+            "event_version": 1,
+            "user_id": int(user_id),
+            "run_id": str(run_id),
+            "digest_date": digest_date,
+        },
+        rabbitmq.channel,
+    )
+
+
+def _job_identity_key(raw_job: dict) -> str:
+    source = str(raw_job.get("source") or "unknown").strip().lower()
+    external_job_id = str(raw_job.get("external_job_id") or "").strip().lower()
+    if external_job_id:
+        return f"{source}:{external_job_id}"
+
+    title = str(raw_job.get("title") or "").strip().lower()
+    company = str(raw_job.get("company") or "").strip().lower()
+    source_url = str(raw_job.get("source_url") or "").strip().lower()
+    seed = f"{source}|{title}|{company}|{source_url}"
+    return hashlib.sha1(seed.encode("utf-8")).hexdigest()
+
+
+def _dedupe_raw_jobs(raw_jobs: list[dict]) -> list[dict]:
+    deduped_jobs: list[dict] = []
+    seen_keys: set[str] = set()
+
+    for raw_job in raw_jobs:
+        key = _job_identity_key(raw_job)
+        if key in seen_keys:
+            continue
+
+        deduped_jobs.append(raw_job)
+        seen_keys.add(key)
+
+    return deduped_jobs
 
 
 async def _get_candidate_context(user_id: int) -> dict:
@@ -189,12 +236,66 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
             return
 
-        raw_jobs = [job for job in jobs if isinstance(job, dict)]
+        raw_jobs = _dedupe_raw_jobs([job for job in jobs if isinstance(job, dict)])
+
+        expanded_search_used = False
+        expanded_jobs_added = 0
+        expanded_window_from: date | None = None
+
+        expand_min_jobs = max(0, int(INGESTION_ATS_EXPAND_MIN_JOBS))
+        should_expand_search = (
+            bool(INGESTION_ATS_EXPAND_ENABLED)
+            and expand_min_jobs > 0
+            and len(raw_jobs) < expand_min_jobs
+        )
+
+        if should_expand_search:
+            requested_days = max(1, (window_to - window_from).days + 1)
+            expand_days = max(
+                requested_days,
+                max(1, min(30, int(INGESTION_ATS_EXPAND_DAYS_RANGE))),
+            )
+            expanded_window_from = window_to - timedelta(days=expand_days - 1)
+
+            if expanded_window_from < window_from:
+                expanded_result = await ats_service.fetch_jobs(
+                    force=force,
+                    date_from=expanded_window_from,
+                    date_to=window_to,
+                )
+
+                if expanded_result.get("status"):
+                    expanded_jobs = [
+                        job
+                        for job in (expanded_result.get("data", {}).get("jobs", []))
+                        if isinstance(job, dict)
+                    ]
+                    before_expand_count = len(raw_jobs)
+                    raw_jobs = _dedupe_raw_jobs(raw_jobs + expanded_jobs)
+                    expanded_jobs_added = max(0, len(raw_jobs) - before_expand_count)
+                    expanded_search_used = expanded_jobs_added > 0
+
+                    if expanded_search_used:
+                        jobs_origin = f"{jobs_origin}+ats_expanded"
+                else:
+                    logger.warning(
+                        "ingestion_worker_ats_expand_failed run_id=%s user_id=%s message=%s",
+                        run_id,
+                        user_id,
+                        expanded_result.get("message"),
+                    )
+
         if not raw_jobs:
             logger.warning(
                 "ingestion_worker_no_jobs_to_publish run_id=%s user_id=%s",
                 run_id,
                 user_id,
+            )
+
+            await _publish_empty_run_digest(
+                int(user_id),
+                str(run_id),
+                str(date_to or date.today().isoformat()),
             )
             return
 
@@ -296,6 +397,12 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
                 user_id,
                 len(jobs),
             )
+
+            await _publish_empty_run_digest(
+                int(user_id),
+                str(run_id),
+                str(date_to or date.today().isoformat()),
+            )
             return
 
         total_jobs = len(raw_jobs)
@@ -322,7 +429,7 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             )
 
         logger.info(
-            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s hard_rejected=%s filter_enabled=%s candidate_signals=%s sources=%s origin=%s fallback=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
+            "ingestion_worker_queued_normalization run_id=%s user_id=%s total_jobs=%s fetched_jobs=%s filtered_out=%s hard_rejected=%s filter_enabled=%s candidate_signals=%s sources=%s origin=%s fallback=%s ats_expand_used=%s ats_expand_added=%s ats_expand_date_from=%s date_from=%s date_to=%s days_range=%s force_rescore=%s",
             run_id,
             user_id,
             total_jobs,
@@ -334,6 +441,9 @@ async def process_ingestion_event(message: AbstractIncomingMessage) -> None:
             source_count,
             jobs_origin,
             fallback_used,
+            expanded_search_used,
+            expanded_jobs_added,
+            expanded_window_from.isoformat() if expanded_window_from else None,
             date_from,
             date_to,
             days_range,
