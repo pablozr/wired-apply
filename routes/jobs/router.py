@@ -17,12 +17,13 @@ router = APIRouter()
 async def list_jobs(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    include_exploration: bool = Query(default=False, alias="includeExploration"),
     user: dict = Depends(security.validate_token_wrapper),
     conn: asyncpg.Connection = Depends(postgresql.get_db),
 ):
     return await default_response(
         jobs_service.list_jobs,
-        [conn, user["userId"], limit, offset],
+        [conn, user["userId"], limit, offset, include_exploration],
     )
 
 
@@ -46,12 +47,24 @@ async def get_daily_ranking(
     days_range: int = Query(default=7, ge=1, le=30, alias="daysRange"),
     date_from: date | None = Query(default=None, alias="dateFrom"),
     date_to: date | None = Query(default=None, alias="dateTo"),
+    include_exploration: bool = Query(default=False, alias="includeExploration"),
+    ai_processed_only: bool = Query(default=True, alias="aiProcessedOnly"),
     user: dict = Depends(security.validate_token_wrapper),
     conn: asyncpg.Connection = Depends(postgresql.get_db),
 ):
     return await default_response(
         ranking_service.get_daily_ranking,
-        [conn, user["userId"], limit, offset, days_range, date_from, date_to],
+        [
+            conn,
+            user["userId"],
+            limit,
+            offset,
+            days_range,
+            date_from,
+            date_to,
+            include_exploration,
+            ai_processed_only,
+        ],
     )
 
 

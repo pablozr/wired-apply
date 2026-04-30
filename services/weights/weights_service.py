@@ -1,10 +1,10 @@
 import asyncpg
 
 DEFAULT_SCORE_WEIGHTS = {
-    "role_weight": 0.35,
-    "salary_weight": 0.25,
-    "location_weight": 0.20,
-    "seniority_weight": 0.20,
+    "role_weight": 0.50,
+    "salary_weight": 0.10,
+    "location_weight": 0.25,
+    "seniority_weight": 0.15,
 }
 
 

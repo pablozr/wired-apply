@@ -57,30 +57,36 @@ def tokenize_text(*values) -> set[str]:
 
 
 _SENIORITY_PATTERNS_LEVEL_4 = (
-    r"\bstaff\b",
-    r"\bprincipal\b",
+    r"\bstaff\s+(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|product|security|architect)\b",
+    r"\bprincipal\s+(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|product|security|architect)\b",
     r"\barchitect\b",
-    r"\bdirector\b",
-    r"\bvp\b",
-    r"\bhead\b",
-    r"\blead\b",
-    r"\btech\s*lead\b",
-    r"\btechnical\s*lead\b",
-    r"\bengineering\s*manager\b",
-    r"\bmanager\b",
-    r"\bgerente\b",
-    r"\bcoordenador\b",
+    r"\bdirector\s+(?:of|engineering|technology|product|software)\b",
+    r"\bvp\s+of\b",
+    r"\bhead\s+of\b",
+    r"\b(?:tech|technical|team|engineering|squad|tribe|product)\s+lead\b",
+    r"\blead\s+(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|architect|product|designer|scientist)\b",
+    r"\bl[ií]der\s+(?:tecnico|t[eé]cnico|de|do)\b",
+    r"\bengineering\s+manager\b",
+    r"\bproduct\s+manager\b",
+    r"\bproject\s+manager\b",
+    r"\bgerente\s+de\b",
+    r"\bcoordenador\s+de\b",
 )
 
 _SENIORITY_PATTERNS_LEVEL_3 = (
     r"\bsenior\b",
-    r"\bsr\.?\b",
+    r"\bs[eê]nior\b",
+    r"\bsr(?![a-z0-9_])",
     r"\bsnr\b",
-    r"\biii\b",
-    r"\biv\b",
+    r"\b(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|architect|designer|scientist)\s+iii\b",
+    r"\b(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|architect|designer|scientist)\s+iv\b",
     r"\blevel\s*[345]\b",
     r"\bl[345]\b",
     r"\bespecialista\b",
+    r"\bspecialist\b",
+    r"\bssr\b",
+    r"\bsemi[-\s]?senior\b",
+    r"\bsemi[-\s]?s[eê]nior\b",
 )
 
 _SENIORITY_PATTERNS_LEVEL_2 = (
@@ -88,7 +94,7 @@ _SENIORITY_PATTERNS_LEVEL_2 = (
     r"\bmid[-\s]?level\b",
     r"\bmiddle\b",
     r"\bpleno\b",
-    r"\bii\b",
+    r"\b(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|architect|designer|scientist)\s+ii\b",
     r"\blevel\s*2\b",
     r"\bl2\b",
     r"\bregular\b",
@@ -96,7 +102,8 @@ _SENIORITY_PATTERNS_LEVEL_2 = (
 
 _SENIORITY_PATTERNS_LEVEL_1 = (
     r"\bjunior\b",
-    r"\bjr\.?\b",
+    r"\bj[uú]nior\b",
+    r"\bjr(?![a-z0-9_])",
     r"\bentry\b",
     r"\bentry[-\s]?level\b",
     r"\bintern\b",
@@ -104,11 +111,10 @@ _SENIORITY_PATTERNS_LEVEL_1 = (
     r"\btrainee\b",
     r"\bestagi\w*\b",
     r"\baprendiz\b",
-    r"\bgrad\b",
-    r"\bgraduate\b",
-    r"\bnew\s*grad\b",
+    r"\bnew\s*grad(?:uate)?\b",
     r"\blevel\s*1\b",
     r"\bl1\b",
+    r"\b(?:engineer|developer|software|backend|frontend|fullstack|data|ml|devops|sre|infra|architect|designer|scientist)\s+i\b",
 )
 
 
@@ -139,9 +145,8 @@ def infer_seniority_level(*values) -> int | None:
 ABOVE_LEVEL_TITLE_TOKENS = frozenset({
     "senior", "sr", "snr",
     "staff", "principal", "architect",
-    "lead", "head", "manager", "director", "vp",
-    "iii", "iv",
-    "gerente", "coordenador", "especialista",
+    "head", "director", "vp",
+    "ssr", "especialista",
 })
 
 
@@ -158,6 +163,21 @@ def title_has_hard_above_level_marker(title_tokens: set[str]) -> bool:
     return bool(title_tokens & HARD_ABOVE_LEVEL_TITLE_TOKENS)
 
 
+def role_is_above_junior(
+    *,
+    title: str,
+    seniority_hint: str | None = None,
+    description: str | None = None,
+    requirements: str | None = None,
+) -> bool:
+    job_seniority = infer_seniority_level(seniority_hint, title, description, requirements)
+    if job_seniority is not None and job_seniority >= 3:
+        return True
+
+    title_tokens = tokenize_text(title)
+    return bool(title_tokens & ABOVE_LEVEL_TITLE_TOKENS)
+
+
 _BR_SYNONYMS = frozenset({
     "br", "bra", "brasil", "brazil", "brazilian", "brasileiro", "brasileira",
 })
@@ -172,6 +192,14 @@ _BR_STATES_TO_NAMES = {
     "rr": "roraima", "sc": "santa catarina", "sp": "sao paulo",
     "se": "sergipe", "to": "tocantins",
 }
+
+_BR_UF_CODES = frozenset(_BR_STATES_TO_NAMES.keys())
+_BR_STATE_NAME_TOKENS = frozenset(
+    token
+    for state_name in _BR_STATES_TO_NAMES.values()
+    for token in tokenize_text(state_name)
+)
+_BR_GEO_TOKENS = frozenset(set(_BR_UF_CODES) | set(_BR_STATE_NAME_TOKENS) | set(_BR_SYNONYMS))
 
 _LATAM_SYNONYMS = frozenset({
     "latam", "latin", "america", "americas", "south", "central",
@@ -236,10 +264,6 @@ def location_accepts_remote(preferred_locations: list[str]) -> bool:
     return False
 
 
-def work_model_prefers_remote(preferred_work_model: str) -> bool:
-    return _is_remote_text(preferred_work_model)
-
-
 def expand_role_tokens(tokens: set[str]) -> set[str]:
     expanded = set(tokens or set())
 
@@ -293,7 +317,7 @@ def location_matches(job_location: str, preferred_locations: list[str]) -> bool:
         if (
             meaningful
             and meaningful & _BR_SYNONYMS
-            and job_tokens & _BR_SYNONYMS
+            and job_tokens & _BR_GEO_TOKENS
         ):
             return True
 
@@ -325,8 +349,13 @@ def location_signals(
         elif "onsite" in work_model or "on-site" in work_model or "presencial" in work_model:
             work_model_signal = 0.95 if not (is_remote or is_hybrid) else 0.40
 
-    prefers_remote = work_model_prefers_remote(preferred_work_model)
-    accepts_remote = location_accepts_remote(preferred_locations) or prefers_remote
+    prefers_remote_or_hybrid = (
+        "remote" in work_model
+        or "remoto" in work_model
+        or "hybrid" in work_model
+        or "hibrido" in work_model
+    )
+    accepts_remote = location_accepts_remote(preferred_locations) or prefers_remote_or_hybrid
     has_match = False
     location_signal = work_model_signal
 

@@ -3,8 +3,10 @@ import json
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
 
-from core.logger.logger import logger
+from core.config.config import INGESTION_RELEVANCE_THRESHOLD
+from services.common import internal_error
 from schemas.jobs import JobCreateRequest, JobUpdateRequest, job_from_row
+from services.rules.text_normalization import infer_seniority_level, role_is_above_junior
 
 
 async def create_job(
@@ -83,15 +85,22 @@ async def create_job(
             "data": {},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def list_jobs(
-    conn: asyncpg.Connection, user_id: int, limit: int = 20, offset: int = 0
+    conn: asyncpg.Connection,
+    user_id: int,
+    limit: int = 20,
+    offset: int = 0,
+    include_exploration: bool = False,
 ) -> dict:
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
+    min_relevance_score = max(
+        0.0,
+        min(100.0, float(INGESTION_RELEVANCE_THRESHOLD) * 100.0),
+    )
 
     try:
         rows = await conn.fetch(
@@ -122,15 +131,50 @@ async def list_jobs(
                 updated_at
             FROM jobs
             WHERE user_id = $1
+              AND (
+                    $4::boolean
+                    OR (
+                        NOT COALESCE(ingestion_exploration_kept, FALSE)
+                        AND (
+                            ingestion_relevance_score IS NULL
+                            OR ingestion_relevance_score >= $5::numeric
+                        )
+                    )
+                )
             ORDER BY COALESCE(source_posted_at, first_seen_at) DESC, created_at DESC
             LIMIT $2 OFFSET $3
             """,
             user_id,
             safe_limit,
             safe_offset,
+            bool(include_exploration),
+            min_relevance_score,
         )
 
-        jobs = [job_from_row(row) for row in rows]
+        profile_row = await conn.fetchrow(
+            "SELECT seniority, objective FROM user_profiles WHERE user_id = $1",
+            user_id,
+        )
+        candidate_seniority = (
+            infer_seniority_level(profile_row["seniority"], profile_row["objective"])
+            if profile_row
+            else None
+        )
+
+        visible_rows = rows
+        if candidate_seniority == 1:
+            visible_rows = [
+                row
+                for row in rows
+                if not role_is_above_junior(
+                    title=str(row["title"] or ""),
+                    seniority_hint=row["seniority_hint"],
+                    description=row["description"],
+                    requirements=row["requirements"],
+                )
+            ]
+
+        jobs = [job_from_row(row) for row in visible_rows]
 
         return {
             "status": True,
@@ -142,11 +186,13 @@ async def list_jobs(
                     "offset": safe_offset,
                     "count": len(jobs),
                 },
+                "filters": {
+                    "includeExploration": bool(include_exploration),
+                },
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_one_job(conn: asyncpg.Connection, user_id: int, job_id: int) -> dict:
@@ -193,8 +239,7 @@ async def get_one_job(conn: asyncpg.Connection, user_id: int, job_id: int) -> di
             "data": {"job": job_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def update_job(
@@ -287,8 +332,7 @@ async def update_job(
             "data": {},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def delete_job(conn: asyncpg.Connection, user_id: int, job_id: int) -> dict:
@@ -306,5 +350,4 @@ async def delete_job(conn: asyncpg.Connection, user_id: int, job_id: int) -> dic
             "data": {"jobId": job_id},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)

@@ -114,9 +114,9 @@ def signal_from_context(
         if expand_role_tokens(skill_tokens) & expanded_job_tokens:
             nice_hits += 1
 
-    nice_overlap = (nice_hits / nice_total) if nice_total else 0.5
+    nice_overlap = (nice_hits / nice_total) if nice_total else 0.0
 
-    role_signal = max(0.30, min(1.0, 0.50 * role_match + 0.40 * skill_overlap + 0.10 * nice_overlap))
+    role_signal = max(0.0, min(1.0, 0.55 * role_match + 0.40 * skill_overlap + 0.05 * nice_overlap))
 
     seniority_gap = None
     if candidate_seniority and job_seniority:
@@ -137,11 +137,11 @@ def signal_from_context(
         if job_seniority >= candidate_seniority:
             salary_signal = 0.90
         elif candidate_seniority - job_seniority == 1:
-            salary_signal = 0.62
+            salary_signal = 0.55
         else:
-            salary_signal = 0.42
+            salary_signal = 0.30
     else:
-        salary_signal = max(0.55, min(0.92, 0.60 + 0.40 * skill_overlap))
+        salary_signal = max(0.30, min(0.90, 0.30 + 0.60 * skill_overlap))
 
     loc = location_signals(location, remote_policy, preferred_locations, preferred_work_model)
     work_model_signal = loc["workModelSignal"]
@@ -332,6 +332,9 @@ def evaluate_ai_prefilter(
     seniority_gap = int(seniority_gap_value) if seniority_gap_value is not None else None
 
     candidate_seniority = signal_details.get("candidateSeniority")
+    candidate_seniority_int = (
+        int(candidate_seniority) if candidate_seniority is not None else None
+    )
     title_hard_above = bool(signal_details.get("titleHardAboveMarker"))
 
     reason = None
@@ -351,8 +354,8 @@ def evaluate_ai_prefilter(
     if seniority_gap is not None and seniority_gap > max(0, int(max_seniority_gap)):
         reason = "high_seniority_gap"
     elif (
-        candidate_seniority
-        and int(candidate_seniority) <= 2
+        candidate_seniority_int
+        and candidate_seniority_int <= 2
         and title_hard_above
         and role_match < max(0.45, float(min_role_match))
     ):

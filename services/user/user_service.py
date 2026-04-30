@@ -6,8 +6,8 @@ from asyncpg.exceptions import UniqueViolationError
 from fastapi import UploadFile
 
 from core.config.config import RESUME_ALLOWED_MIME_TYPES, RESUME_MAX_FILE_SIZE_BYTES
-from core.logger.logger import logger
 from core.security.hashing import hash_password
+from services.common import internal_error
 from schemas.profile import UserProfileUpsertRequest, empty_profile, profile_from_row
 from schemas.resume import resume_from_row
 from schemas.user import UserCreateRequest, UserUpdateRequest, user_from_row
@@ -30,8 +30,7 @@ async def get_one_user(conn: asyncpg.Connection, user_id: int) -> dict:
             "data": {"user": user_from_row(row)},
         }
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
 
 
 async def create(conn: asyncpg.Connection, data: UserCreateRequest) -> dict:
@@ -64,8 +63,7 @@ async def create(conn: asyncpg.Connection, data: UserCreateRequest) -> dict:
     except UniqueViolationError:
         return {"status": False, "message": "Email already registered", "data": {}}
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
 
 
 async def update_me(
@@ -107,8 +105,7 @@ async def update_me(
     except UniqueViolationError:
         return {"status": False, "message": "Email already in use", "data": {}}
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
 
 
 async def get_my_profile(conn: asyncpg.Connection, user_id: int) -> dict:
@@ -141,8 +138,7 @@ async def get_my_profile(conn: asyncpg.Connection, user_id: int) -> dict:
             "data": {"profile": profile},
         }
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
 
 
 async def upsert_my_profile(
@@ -208,8 +204,7 @@ async def upsert_my_profile(
             "data": {"profile": profile_from_row(row)},
         }
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
 
 
 def _validate_resume_file(file_name: str, mime_type: str, file_size: int) -> str | None:
@@ -297,10 +292,44 @@ async def upload_my_resume(
             )
 
             if existing_row:
+                refreshed_row = await conn.fetchrow(
+                    """
+                    UPDATE user_resumes
+                    SET
+                        extracted_text = $1,
+                        extracted_json = $2::jsonb,
+                        parse_status = $3,
+                        parse_confidence = $4,
+                        updated_at = NOW()
+                    WHERE id = $5
+                    RETURNING
+                        id,
+                        user_id,
+                        file_name,
+                        mime_type,
+                        file_size,
+                        file_hash,
+                        parse_status,
+                        parse_confidence,
+                        extracted_text,
+                        extracted_json,
+                        is_active,
+                        created_at,
+                        updated_at
+                    """,
+                    extracted_text,
+                    json.dumps(extracted_json),
+                    parse_status,
+                    parse_confidence,
+                    existing_row["id"],
+                )
+
                 return {
                     "status": True,
-                    "message": "Resume already uploaded",
-                    "data": {"resume": resume_from_row(existing_row)},
+                    "message": "Resume already uploaded; parse refreshed",
+                    "data": {
+                        "resume": resume_from_row(refreshed_row or existing_row)
+                    },
                 }
 
             await conn.execute(
@@ -368,8 +397,7 @@ async def upload_my_resume(
             "data": {"resume": resume_from_row(row)},
         }
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
     finally:
         await file.close()
 
@@ -409,8 +437,7 @@ async def get_my_resume(conn: asyncpg.Connection, user_id: int) -> dict:
             "data": {"resume": resume_from_row(row)},
         }
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)
 
 
 async def delete_my_resume(conn: asyncpg.Connection, user_id: int) -> dict:
@@ -429,5 +456,4 @@ async def delete_my_resume(conn: asyncpg.Connection, user_id: int) -> dict:
             "data": {"deleted": True},
         }
     except Exception as error:
-        logger.exception(error)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(error)

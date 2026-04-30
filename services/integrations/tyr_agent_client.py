@@ -22,7 +22,19 @@ async def get_tyr_agent(kind: str, agent_name: str, prompt: str):
         try:
             from tyr_agent import GPTModel, SimpleAgent
 
-            model = GPTModel(AI_TYR_MODEL)
+            max_tokens = 900
+            effort = "low"
+
+            if kind == "resume":
+                max_tokens = 1800
+            elif kind == "scoring":
+                max_tokens = 900
+
+            model = GPTModel(
+                AI_TYR_MODEL,
+                max_tokens=max_tokens,
+                effort=effort,
+            )
             agent = SimpleAgent(
                 prompt_build=prompt,
                 agent_name=agent_name,

@@ -35,6 +35,30 @@ def _normalize_list(values: list[str] | None) -> list[str]:
     return normalized
 
 
+def _coerce_to_list(value) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        return [str(item) for item in value]
+
+    if isinstance(value, str):
+        normalized = value.replace("\r", "\n").replace(";", ",")
+        if not normalized.strip():
+            return []
+
+        parts = []
+        for line in normalized.split("\n"):
+            for token in line.split(","):
+                item = token.strip()
+                if item:
+                    parts.append(item)
+
+        return parts
+
+    return []
+
+
 def _ensure_list(value) -> list[str]:
     if value is None:
         return []
@@ -97,13 +121,7 @@ class UserProfileUpsertRequest(BaseModel):
     )
     @classmethod
     def normalize_list_fields(cls, value: list[str] | None) -> list[str]:
-        if value is None:
-            return []
-
-        if not isinstance(value, list):
-            return []
-
-        return _normalize_list(value)
+        return _normalize_list(_coerce_to_list(value))
 
 
 class UserProfileData(TypedDict):

@@ -2,9 +2,11 @@ from datetime import date, timedelta
 
 import asyncpg
 
-from core.logger.logger import logger
+from core.config.config import INGESTION_RELEVANCE_THRESHOLD
 from core.utils.json_utils import ensure_dict
+from services.common import internal_error
 from services.rules import scoring_policy
+from services.rules.text_normalization import infer_seniority_level, role_is_above_junior
 
 
 def _coerce_date(value) -> date | None:
@@ -154,8 +156,7 @@ async def get_job_score(conn: asyncpg.Connection, user_id: int, job_id: int) -> 
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_daily_ranking(
@@ -166,9 +167,15 @@ async def get_daily_ranking(
     days_range: int = 7,
     date_from: date | str | None = None,
     date_to: date | str | None = None,
+    include_exploration: bool = False,
+    ai_processed_only: bool = True,
 ) -> dict:
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
+    min_relevance_score = max(
+        0.0,
+        min(100.0, float(INGESTION_RELEVANCE_THRESHOLD) * 100.0),
+    )
     ranking_window = _resolve_ranking_window(days_range, date_from, date_to)
 
     if ranking_window is None:
@@ -188,6 +195,9 @@ async def get_daily_ranking(
                     j.title,
                     j.company,
                     j.location,
+                    j.seniority_hint,
+                    j.description,
+                    j.requirements,
                     j.source_posted_at,
                     j.first_seen_at,
                     j.last_seen_at,
@@ -204,20 +214,61 @@ async def get_daily_ranking(
                     js.ai_skipped_reason,
                     js.updated_at AS score_updated_at
             FROM jobs j
-                     LEFT JOIN job_scores js
+                     JOIN job_scores js
                                ON js.job_id = j.id AND js.user_id = j.user_id
             WHERE j.user_id = $1
+              AND COALESCE(js.final_score, js.score) IS NOT NULL
+              AND (
+                    NOT $8::boolean
+                    OR (js.ai_score IS NOT NULL AND js.ai_skipped_reason IS NULL)
+                  )
               AND COALESCE(j.source_posted_at, j.first_seen_at)::date BETWEEN $2::date AND $3::date
+              AND (
+                    $4::boolean
+                    OR (
+                        NOT COALESCE(j.ingestion_exploration_kept, FALSE)
+                        AND (
+                            j.ingestion_relevance_score IS NULL
+                            OR j.ingestion_relevance_score >= $5::numeric
+                        )
+                    )
+                )
             ORDER BY COALESCE(js.final_score, js.score, 0) DESC, j.created_at DESC
-                LIMIT $4
-            OFFSET $5
+                LIMIT $6
+            OFFSET $7
             """,
             user_id,
             window_from,
             window_to,
+            bool(include_exploration),
+            min_relevance_score,
             safe_limit,
             safe_offset,
+            bool(ai_processed_only),
         )
+
+        profile_row = await conn.fetchrow(
+            "SELECT seniority, objective FROM user_profiles WHERE user_id = $1",
+            user_id,
+        )
+        candidate_seniority = (
+            infer_seniority_level(profile_row["seniority"], profile_row["objective"])
+            if profile_row
+            else None
+        )
+
+        visible_rows = rows
+        if candidate_seniority == 1:
+            visible_rows = [
+                row
+                for row in rows
+                if not role_is_above_junior(
+                    title=str(row["title"] or ""),
+                    seniority_hint=row["seniority_hint"],
+                    description=row["description"],
+                    requirements=row["requirements"],
+                )
+            ]
 
         ranking = [
             {
@@ -274,7 +325,7 @@ async def get_daily_ranking(
                     else None
                 ),
             }
-            for index, row in enumerate(rows, start=safe_offset + 1)
+            for index, row in enumerate(visible_rows, start=safe_offset + 1)
             for score in [
                 scoring_policy.clamp_score(
                     float(row["final_score"] or row["score"] or 0)
@@ -297,11 +348,14 @@ async def get_daily_ranking(
                     "offset": safe_offset,
                     "count": len(ranking),
                 },
+                "filters": {
+                    "includeExploration": bool(include_exploration),
+                    "aiProcessedOnly": bool(ai_processed_only),
+                },
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_module_status() -> dict:
