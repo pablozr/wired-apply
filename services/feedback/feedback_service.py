@@ -1,8 +1,8 @@
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
 
-from core.logger.logger import logger
 from schemas.feedback import FeedbackCreateRequest, FeedbackUpdateRequest, feedback_from_row
+from services.common import internal_error
 from services.weights.weights_service import (
     DEFAULT_SCORE_WEIGHTS,
     weights_from_row,
@@ -155,8 +155,7 @@ async def create_feedback(
             "data": {},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def list_feedback(
@@ -232,8 +231,7 @@ async def list_feedback(
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_one_feedback(
@@ -269,8 +267,7 @@ async def get_one_feedback(
             "data": {"feedback": feedback_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def update_feedback(
@@ -344,8 +341,7 @@ async def update_feedback(
             "data": response_data,
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def delete_feedback(
@@ -370,8 +366,7 @@ async def delete_feedback(
             "data": {"feedbackId": feedback_id},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_module_status() -> dict:

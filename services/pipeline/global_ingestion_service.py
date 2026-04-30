@@ -13,6 +13,7 @@ from core.config.config import (
 from core.logger.logger import logger
 from schemas.pipeline import GlobalIngestionStartRequest
 from services.cache import cache_service
+from services.common import internal_error
 from services.messaging import messaging_service
 
 
@@ -96,8 +97,7 @@ async def start_global_ingestion_run(
         except Exception as release_error:
             logger.exception(release_error)
 
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_global_ingestion_status(redis_client) -> dict:
@@ -126,5 +126,4 @@ async def get_global_ingestion_status(redis_client) -> dict:
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)

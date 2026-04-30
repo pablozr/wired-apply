@@ -2,8 +2,8 @@ from core.config.config import (
     GLOBAL_CATALOG_CLEANUP_LAST_RUN_KEY_PREFIX,
     GLOBAL_CATALOG_CLEANUP_LOCK_KEY_PREFIX,
 )
-from core.logger.logger import logger
 from services.cache import cache_service
+from services.common import internal_error
 
 
 def _cleanup_lock_key() -> str:
@@ -40,5 +40,4 @@ async def get_global_catalog_cleanup_status(redis_client) -> dict:
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)

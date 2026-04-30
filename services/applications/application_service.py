@@ -1,7 +1,7 @@
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
 
-from core.logger.logger import logger
+from services.common import internal_error
 from schemas.applications import (
     ApplicationCreateRequest,
     ApplicationUpdateRequest,
@@ -69,8 +69,7 @@ async def create_application(
             "data": {},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def list_applications(
@@ -146,8 +145,7 @@ async def list_applications(
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_one_application(
@@ -184,8 +182,7 @@ async def get_one_application(
             "data": {"application": application_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def update_application(
@@ -237,8 +234,7 @@ async def update_application(
             "data": {"application": application_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def delete_application(
@@ -262,8 +258,7 @@ async def delete_application(
             "data": {"applicationId": application_id},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_module_status() -> dict:

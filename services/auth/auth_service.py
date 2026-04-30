@@ -10,7 +10,6 @@ from core.config.config import (
     RESET_COOKIE_MAX_AGE,
     settings,
 )
-from core.logger.logger import logger
 from core.security.hashing import hash_password, verify_password
 from core.security.jwt_payloads import auth_jwt_payload_from_row, reset_jwt_payload
 from core.security.security import create_access_token
@@ -23,6 +22,7 @@ from schemas.auth import (
 )
 from schemas.user import user_from_row
 from services.cache import cache_service
+from services.common import internal_error
 from services.messaging import messaging_service
 from templates.email import RESET_PASSWORD_EMAIL_TEMPLATE
 
@@ -52,8 +52,7 @@ async def login(conn: asyncpg.Connection, data: LoginRequestModel) -> dict:
             "data": {"user": u, "access_token": token},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def forget_password(
@@ -110,8 +109,7 @@ async def forget_password(
             "data": {"access_token": token},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def validate_reset_code(
@@ -143,8 +141,7 @@ async def validate_reset_code(
             "data": {"access_token": token},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def update_password_after_reset(
@@ -172,5 +169,4 @@ async def update_password_after_reset(
             "data": {"user": user_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)

@@ -6,8 +6,8 @@ import aio_pika
 import asyncpg
 
 from core.config.config import DIGEST_EMAIL_QUEUE
-from core.logger.logger import logger
 from schemas.digest import DigestGenerateRequest, digest_from_row
+from services.common import internal_error
 from services.messaging import messaging_service
 
 
@@ -116,8 +116,7 @@ async def generate_daily_digest(
             "data": {"digest": digest_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_daily_digest(
@@ -175,8 +174,7 @@ async def get_daily_digest(
             "data": {"digest": digest_from_row(row)},
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_module_status() -> dict:

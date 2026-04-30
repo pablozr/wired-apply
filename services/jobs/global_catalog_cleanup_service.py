@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import asyncpg
 
-from core.logger.logger import logger
+from services.common import internal_error
 
 
 async def delete_stale_global_jobs_batch(
@@ -47,9 +47,4 @@ async def delete_stale_global_jobs_batch(
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {
-            "status": False,
-            "message": "Global catalog cleanup batch failed",
-            "data": {},
-        }
+        return internal_error(e, message="Global catalog cleanup batch failed")

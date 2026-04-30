@@ -14,6 +14,7 @@ from core.config.config import (
 from core.logger.logger import logger
 from schemas.pipeline import PipelineStartRequest
 from services.cache import cache_service
+from services.common import internal_error
 from services.messaging import messaging_service
 from services.pipeline import pipeline_metrics_service
 
@@ -110,8 +111,7 @@ async def start_pipeline_run(
         except Exception as release_error:
             logger.exception(release_error)
 
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)
 
 
 async def get_pipeline_status(conn: asyncpg.Connection, user_id: int, redis_client) -> dict:
@@ -163,5 +163,4 @@ async def get_pipeline_status(conn: asyncpg.Connection, user_id: int, redis_clie
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {"status": False, "message": "Internal server error", "data": {}}
+        return internal_error(e)

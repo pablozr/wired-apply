@@ -2,7 +2,7 @@ from datetime import date
 
 import asyncpg
 
-from core.logger.logger import logger
+from services.common import internal_error
 
 
 async def list_jobs_by_window(
@@ -103,9 +103,4 @@ async def list_jobs_by_window(
             },
         }
     except Exception as e:
-        logger.exception(e)
-        return {
-            "status": False,
-            "message": "Failed to query global catalog",
-            "data": {},
-        }
+        return internal_error(e, message="Failed to query global catalog")
