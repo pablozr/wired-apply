@@ -12,6 +12,7 @@ from core.redis.redis import redis_cache
 from schemas.pipeline import GlobalIngestionStartRequest
 from services.cache import cache_service
 from services.pipeline import global_ingestion_service
+from workers.common import managed_worker_resources
 
 
 SCHEDULER_TRIGGER_KEY_PREFIX = "global_ingestion:scheduler:trigger"
@@ -70,18 +71,12 @@ async def _tick_scheduler() -> None:
 
 
 async def run() -> None:
-    await redis_cache.connect()
-    await rabbitmq.connect()
+    async with managed_worker_resources(use_redis=True, use_rabbitmq=True):
+        interval_seconds = max(60, int(GLOBAL_INGESTION_SCHEDULER_INTERVAL_SECONDS))
 
-    interval_seconds = max(60, int(GLOBAL_INGESTION_SCHEDULER_INTERVAL_SECONDS))
-
-    try:
         while True:
             await _tick_scheduler()
             await asyncio.sleep(interval_seconds)
-    finally:
-        await rabbitmq.disconnect()
-        await redis_cache.disconnect()
 
 
 if __name__ == "__main__":

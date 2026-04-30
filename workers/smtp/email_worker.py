@@ -10,6 +10,7 @@ from core.config.config import settings
 from core.config.config import EMAIL_QUEUE
 from core.logger.logger import logger
 from core.rabbitmq.rabbitmq import rabbitmq
+from workers.common import managed_worker_resources
 
 
 def _send_smtp(body: dict) -> None:
@@ -41,20 +42,16 @@ async def process_email(message: AbstractIncomingMessage) -> None:
 
 
 async def start_email_worker() -> None:
-    await rabbitmq.connect()
+    async with managed_worker_resources(use_rabbitmq=True):
+        assert rabbitmq.channel is not None
 
-    assert rabbitmq.channel is not None
+        await rabbitmq.channel.set_qos(prefetch_count=1)
 
-    await rabbitmq.channel.set_qos(prefetch_count=1)
+        queue = await rabbitmq.channel.declare_queue(EMAIL_QUEUE, durable=True)
 
-    queue = await rabbitmq.channel.declare_queue(EMAIL_QUEUE, durable=True)
+        await queue.consume(process_email)
 
-    await queue.consume(process_email)
-
-    try:
         await asyncio.Future()
-    finally:
-        await rabbitmq.disconnect()
 
 
 if __name__ == "__main__":

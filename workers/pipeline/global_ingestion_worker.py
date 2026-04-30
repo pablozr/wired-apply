@@ -13,7 +13,6 @@ from core.config.config import (
     GLOBAL_INGESTION_RUN_LOCK_KEY_PREFIX,
     PIPELINE_EVENT_DEDUPE_TTL_SECONDS,
 )
-from core.http.http_client import http_client
 from core.logger.logger import logger
 from core.postgresql.postgresql import postgresql
 from core.rabbitmq.rabbitmq import rabbitmq
@@ -21,6 +20,7 @@ from core.redis.redis import redis_cache
 from services.cache import cache_service
 from services.integrations import ats_service
 from services.jobs import global_jobs_service
+from workers.common import managed_worker_resources
 
 
 def _event_dedupe_key(event_id: str) -> str:
@@ -202,24 +202,19 @@ async def process_global_ingestion_event(message: AbstractIncomingMessage) -> No
 
 
 async def run() -> None:
-    await postgresql.connect()
-    await redis_cache.connect()
-    await rabbitmq.connect()
-    await http_client.connect()
+    async with managed_worker_resources(
+        use_postgresql=True,
+        use_redis=True,
+        use_rabbitmq=True,
+        use_http_client=True,
+    ):
+        assert rabbitmq.channel is not None
 
-    assert rabbitmq.channel is not None
+        await rabbitmq.channel.set_qos(prefetch_count=1)
+        queue = await rabbitmq.channel.declare_queue(GLOBAL_INGESTION_JOBS_QUEUE, durable=True)
+        await queue.consume(process_global_ingestion_event)
 
-    await rabbitmq.channel.set_qos(prefetch_count=1)
-    queue = await rabbitmq.channel.declare_queue(GLOBAL_INGESTION_JOBS_QUEUE, durable=True)
-    await queue.consume(process_global_ingestion_event)
-
-    try:
         await asyncio.Future()
-    finally:
-        await http_client.disconnect()
-        await rabbitmq.disconnect()
-        await redis_cache.disconnect()
-        await postgresql.disconnect()
 
 
 if __name__ == "__main__":

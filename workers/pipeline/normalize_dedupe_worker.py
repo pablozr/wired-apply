@@ -20,6 +20,7 @@ from services.jobs import global_jobs_service
 from services.messaging import messaging_service
 from services.pipeline import pipeline_metrics_service
 from services.rules import deduplication_policy
+from workers.common import managed_worker_resources
 
 
 def _normalize_source_posted_at(value) -> datetime | None:
@@ -276,23 +277,19 @@ async def process_normalization_event(message: AbstractIncomingMessage) -> None:
 
 
 async def run() -> None:
-    await postgresql.connect()
-    await redis_cache.connect()
-    await rabbitmq.connect()
+    async with managed_worker_resources(
+        use_postgresql=True,
+        use_redis=True,
+        use_rabbitmq=True,
+    ):
+        assert rabbitmq.channel is not None
 
-    assert rabbitmq.channel is not None
+        await rabbitmq.channel.set_qos(prefetch_count=1)
+        queue = await rabbitmq.channel.declare_queue(JOBS_NORMALIZED_QUEUE, durable=True)
+        await rabbitmq.channel.declare_queue(SCORING_JOBS_QUEUE, durable=True)
+        await queue.consume(process_normalization_event)
 
-    await rabbitmq.channel.set_qos(prefetch_count=1)
-    queue = await rabbitmq.channel.declare_queue(JOBS_NORMALIZED_QUEUE, durable=True)
-    await rabbitmq.channel.declare_queue(SCORING_JOBS_QUEUE, durable=True)
-    await queue.consume(process_normalization_event)
-
-    try:
         await asyncio.Future()
-    finally:
-        await rabbitmq.disconnect()
-        await redis_cache.disconnect()
-        await postgresql.disconnect()
 
 
 if __name__ == "__main__":

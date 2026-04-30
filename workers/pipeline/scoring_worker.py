@@ -47,6 +47,7 @@ from services.rules.scoring_context_policy import (
     signal_from_context,
 )
 from services.user.user_context_service import get_ai_context
+from workers.common import managed_worker_resources
 
 
 async def _should_publish_digest(
@@ -548,23 +549,19 @@ async def process_scoring_event(message: AbstractIncomingMessage) -> None:
 
 
 async def run() -> None:
-    await postgresql.connect()
-    await redis_cache.connect()
-    await rabbitmq.connect()
+    async with managed_worker_resources(
+        use_postgresql=True,
+        use_redis=True,
+        use_rabbitmq=True,
+    ):
+        assert rabbitmq.channel is not None
 
-    assert rabbitmq.channel is not None
+        await rabbitmq.channel.set_qos(prefetch_count=1)
+        queue = await rabbitmq.channel.declare_queue(SCORING_JOBS_QUEUE, durable=True)
+        await rabbitmq.channel.declare_queue(DIGEST_EMAIL_QUEUE, durable=True)
+        await queue.consume(process_scoring_event)
 
-    await rabbitmq.channel.set_qos(prefetch_count=1)
-    queue = await rabbitmq.channel.declare_queue(SCORING_JOBS_QUEUE, durable=True)
-    await rabbitmq.channel.declare_queue(DIGEST_EMAIL_QUEUE, durable=True)
-    await queue.consume(process_scoring_event)
-
-    try:
         await asyncio.Future()
-    finally:
-        await rabbitmq.disconnect()
-        await redis_cache.disconnect()
-        await postgresql.disconnect()
 
 
 if __name__ == "__main__":

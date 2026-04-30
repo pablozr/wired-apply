@@ -10,6 +10,7 @@ from core.postgresql.postgresql import postgresql
 from core.redis.redis import redis_cache
 from services.cache import cache_service
 from services.pipeline import global_catalog_cleanup_run_service
+from workers.common import managed_worker_resources
 
 
 SCHEDULER_TRIGGER_KEY_PREFIX = "global_catalog:cleanup:trigger"
@@ -66,18 +67,12 @@ async def _tick_scheduler() -> None:
 
 
 async def run() -> None:
-    await postgresql.connect()
-    await redis_cache.connect()
+    async with managed_worker_resources(use_postgresql=True, use_redis=True):
+        interval_seconds = max(60, int(GLOBAL_CATALOG_CLEANUP_INTERVAL_SECONDS))
 
-    interval_seconds = max(60, int(GLOBAL_CATALOG_CLEANUP_INTERVAL_SECONDS))
-
-    try:
         while True:
             await _tick_scheduler()
             await asyncio.sleep(interval_seconds)
-    finally:
-        await redis_cache.disconnect()
-        await postgresql.disconnect()
 
 
 if __name__ == "__main__":
